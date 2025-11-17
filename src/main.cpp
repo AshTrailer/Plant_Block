@@ -3,12 +3,15 @@
 #include <Wire.h>
 #include <U8x8lib.h>
 
-const int BUTTON1_PIN = 16;
-const int BUTTON2_PIN = 4;
-const int BUTTON3_PIN = 2;
-const int BUTTON4_PIN = 15;
+#define LINE_WIDTH 16
 
-const int LED_PIN = 23;
+#define DHTPIN 5         // DHT11 数据口接 ESP32 的 GPIO5
+#define DHTTYPE DHT11    // DHT11 类型
+
+const int BUTTON1_PIN = 17;
+const int BUTTON2_PIN = 16;
+const int BUTTON3_PIN = 4;
+const int BUTTON4_PIN = 15;
 
 const unsigned long BUTTON4_DEBOUNCE_MS = 50;
 const unsigned long BUTTON4_REPEAT_MS   = 200;
@@ -91,11 +94,7 @@ class Button {
     }
 
     void handlePulse(bool lastLogic) {
-      if (lastLogic == HIGH && _buttonState == LOW) {
-        _output = true;
-      } else {
-          _output = false;
-      }
+      _output = (lastLogic == HIGH && _buttonState == LOW);
     }
 
     void handleRepeat() {
@@ -112,31 +111,32 @@ class Button {
     }
 };
 
-Button btn1(BUTTON1_PIN, BUTTON_TOGGLE);
-Button btn2(BUTTON2_PIN, BUTTON_HOLD);
+Button btn1(BUTTON1_PIN, BUTTON_PULSE);
+Button btn2(BUTTON2_PIN, BUTTON_PULSE);
 Button btn3(BUTTON3_PIN, BUTTON_PULSE);
-Button btn4(BUTTON4_PIN, BUTTON_REPEAT, BUTTON4_DEBOUNCE_MS, BUTTON4_REPEAT_MS);
+Button btn4(BUTTON4_PIN, BUTTON_PULSE);
 
 U8X8_SSD1306_128X64_NONAME_HW_I2C u8x8(U8X8_PIN_NONE);
 
 void drawStringWrap(uint8_t col, uint8_t row, const char* str);
+void clearLine(uint8_t row);
 
-uint32_t btn3Counter = 0;
+DHT dht(DHTPIN, DHTTYPE);
+unsigned long DHTlastUpdate = 0;
+const unsigned long DHTupdateInterval = 5000;
 
 void setup() {
   Serial.begin(115200);
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
 
   Serial.println("Button test ready.");
 
-  Wire.begin(21, 22);  // SDA=21, SCL=22
+  Wire.begin(22, 23);  // SDA=21, SCL=22
 
   u8x8.begin();
   u8x8.setFont(u8x8_font_chroma48medium8_r);
   u8x8.clear();
-
-  pinMode(LED_PIN, OUTPUT);
+  
+  dht.begin();
 
   delay(50);
 }
@@ -144,32 +144,46 @@ void setup() {
 void loop() {
   bool btn1Out = btn1.update();
   bool btn2Out = btn2.update();
-  bool btn3Out = btn3.update(); // <-- Pulse mode
+  bool btn3Out = btn3.update(); 
   bool btn4Out = btn4.update();
 
-  if (btn1Out) Serial.println("Button 1 TOGGLE");
-  if (btn2Out) Serial.println("Button 2 HOLD");
-  if (btn3Out) Serial.println("Button 3 PULSE");
-  if (btn4Out) Serial.println("Button 4 REPEAT");
+  unsigned long now = millis();
+  if (now - DHTlastUpdate >= DHTupdateInterval) {
+    DHTlastUpdate = now;
 
-  if (btn3Out) {
-    btn3Counter++;                  // 每次按下 +1
-    digitalWrite(LED_PIN, HIGH);    // 亮一下，表示被触发
-  } else {
-    digitalWrite(LED_PIN, LOW);
+    float temp = dht.readTemperature();
+    float hum = dht.readHumidity();
+
+    char buffer[32];
+
+    clearLine(0);
+    if (isnan(temp)) {
+      snprintf(buffer, sizeof(buffer), "Temp: NaN");
+    } else {
+      snprintf(buffer, sizeof(buffer), "Temp: %.1f C", temp);
+    }
+    u8x8.drawString(0, 0, buffer);
+
+    clearLine(1);
+    if (isnan(hum)) {
+      snprintf(buffer, sizeof(buffer), "Humidity: NaN");
+    } else {
+      snprintf(buffer, sizeof(buffer), "Humidity: %.1f %%", hum);
+    }
+    u8x8.drawString(0, 1, buffer);
+
+    Serial.print("Temperature: ");
+    if (isnan(temp)) Serial.print("NaN");
+    else Serial.print(temp);
+    Serial.print(" ℃, Humidity: ");
+    if (isnan(hum)) Serial.println("NaN");
+    else Serial.print(hum); Serial.println(" %");
   }
-
-  // ----------- OLED 显示 Button3 计数 -----------
-  u8x8.setCursor(0, 0);
-  u8x8.print("Btn3 pressed:");
-
-  u8x8.setCursor(0, 1);
-  u8x8.print(btn3Counter);
 }
 
 void drawStringWrap(uint8_t col, uint8_t row, const char* str)
 {
-    const uint8_t maxCols = 16; // 128px / 8px
+    const uint8_t maxCols = 16; 
     uint8_t line = row;
     uint8_t colIndex = col;
 
@@ -183,3 +197,22 @@ void drawStringWrap(uint8_t col, uint8_t row, const char* str)
         colIndex++;
     }
 }
+
+void clearLine(uint8_t row) {
+  char empty[LINE_WIDTH + 1];
+  memset(empty, ' ', LINE_WIDTH);
+  empty[LINE_WIDTH] = '\0';
+  u8x8.drawString(0, row, empty);
+}
+
+
+
+
+
+
+
+
+
+
+
+

@@ -5,8 +5,8 @@
 
 #define LINE_WIDTH 16
 
-#define DHTPIN 5         // DHT11 数据口接 ESP32 的 GPIO5
-#define DHTTYPE DHT11    // DHT11 类型
+#define DHTPIN 5
+#define DHTTYPE DHT11
 
 const int BUTTON1_PIN = 17;
 const int BUTTON2_PIN = 16;
@@ -22,6 +22,8 @@ enum ButtonMode {
   BUTTON_PULSE,
   BUTTON_REPEAT
 };
+
+U8X8_SSD1306_128X64_NONAME_HW_I2C u8x8(U8X8_PIN_NONE);
 
 class Button {
   public:
@@ -111,19 +113,118 @@ class Button {
     }
 };
 
+class DHT_Display {
+private:
+    DHT dht;
+    uint8_t row;
+    float lastTemp;
+    float lastHum;
+    unsigned long lastSampleTime;
+    unsigned long lastUpdateTime;
+    float tempSum;
+    float humSum;
+    int sampleCount;
+
+    bool fastMode;
+    const unsigned long sampleIntervalSlow = 2500; // 2.5s
+    const unsigned long sampleIntervalFast = 1000; // 1s
+    const unsigned long updateInterval = 5000;     // 5s
+    const float tempThreshold = 3.0;               // ℃
+    const float humThreshold  = 20.0;              // %
+
+public:
+    DHT_Display(uint8_t pin, uint8_t r) : dht(pin, DHTTYPE), row(r),
+                                          lastTemp(NAN), lastHum(NAN),
+                                          lastSampleTime(0), lastUpdateTime(0),
+                                          tempSum(0), humSum(0), sampleCount(0),
+                                          fastMode(false) {}
+
+    void begin() {
+        dht.begin();
+    }
+
+    void update() {
+        unsigned long now = millis();
+
+        unsigned long interval = fastMode ? sampleIntervalFast : sampleIntervalSlow;
+        if (now - lastSampleTime >= interval) {
+            lastSampleTime = now;
+            float t = dht.readTemperature();
+            float h = dht.readHumidity();
+            if (!isnan(t)) tempSum += t;
+            if (!isnan(h)) humSum += h;
+            sampleCount++;
+        }
+
+        if (now - lastUpdateTime >= updateInterval) {
+            lastUpdateTime = now;
+
+            float avgTemp = NAN;
+            float avgHum  = NAN;
+
+            if (sampleCount > 0) {
+                avgTemp = tempSum / sampleCount;
+                avgHum  = humSum  / sampleCount;
+            }
+
+            display(avgTemp, avgHum);
+
+            if (!isnan(avgTemp) && !isnan(avgHum) && !isnan(lastTemp) && !isnan(lastHum)) {
+                if (!fastMode) {
+                    if (abs(avgTemp - lastTemp) > tempThreshold || abs(avgHum - lastHum) > humThreshold) {
+                        fastMode = true;
+                    }
+                } else {
+                    if (abs(avgTemp - lastTemp) <= tempThreshold && abs(avgHum - lastHum) <= humThreshold) {
+                        fastMode = false;
+                    }
+                }
+            }
+
+            if (!isnan(avgTemp)) lastTemp = avgTemp;
+            if (!isnan(avgHum))  lastHum  = avgHum;
+
+            tempSum = 0;
+            humSum = 0;
+            sampleCount = 0;
+        }
+    }
+
+    void display(float temp, float hum) {
+        char buffer[32];
+        if (isnan(temp)) {
+            snprintf(buffer, sizeof(buffer), "T: NaN H: ");
+        } else {
+            snprintf(buffer, sizeof(buffer), "T: %.1f", temp);
+        }
+        if (isnan(hum)) {
+            strcat(buffer, "NaN%%");
+        } else {
+            char humBuf[16];
+            snprintf(humBuf, sizeof(humBuf), " %.1f%%", hum);
+            strcat(buffer, humBuf);
+        }
+
+        char empty[21];
+        memset(empty, ' ', 20); empty[20] = '\0';
+        u8x8.drawString(0, row, empty);
+        u8x8.drawString(0, row, buffer);
+
+        Serial.println(buffer);
+    }
+};
+
 Button btn1(BUTTON1_PIN, BUTTON_PULSE);
 Button btn2(BUTTON2_PIN, BUTTON_PULSE);
 Button btn3(BUTTON3_PIN, BUTTON_PULSE);
 Button btn4(BUTTON4_PIN, BUTTON_PULSE);
 
-U8X8_SSD1306_128X64_NONAME_HW_I2C u8x8(U8X8_PIN_NONE);
+DHT_Display dhtDisplay(DHTPIN, 0);
 
 void drawStringWrap(uint8_t col, uint8_t row, const char* str);
 void clearLine(uint8_t row);
 
-DHT dht(DHTPIN, DHTTYPE);
-unsigned long DHTlastUpdate = 0;
-const unsigned long DHTupdateInterval = 5000;
+
 
 void setup() {
   Serial.begin(115200);
@@ -136,7 +237,7 @@ void setup() {
   u8x8.setFont(u8x8_font_chroma48medium8_r);
   u8x8.clear();
   
-  dht.begin();
+  dhtDisplay.begin();
 
   delay(50);
 }
@@ -147,39 +248,10 @@ void loop() {
   bool btn3Out = btn3.update(); 
   bool btn4Out = btn4.update();
 
-  unsigned long now = millis();
-  if (now - DHTlastUpdate >= DHTupdateInterval) {
-    DHTlastUpdate = now;
+  dhtDisplay.update();
 
-    float temp = dht.readTemperature();
-    float hum = dht.readHumidity();
-
-    char buffer[32];
-
-    clearLine(0);
-    if (isnan(temp)) {
-      snprintf(buffer, sizeof(buffer), "Temp: NaN");
-    } else {
-      snprintf(buffer, sizeof(buffer), "Temp: %.1f C", temp);
-    }
-    u8x8.drawString(0, 0, buffer);
-
-    clearLine(1);
-    if (isnan(hum)) {
-      snprintf(buffer, sizeof(buffer), "Humidity: NaN");
-    } else {
-      snprintf(buffer, sizeof(buffer), "Humidity: %.1f %%", hum);
-    }
-    u8x8.drawString(0, 1, buffer);
-
-    Serial.print("Temperature: ");
-    if (isnan(temp)) Serial.print("NaN");
-    else Serial.print(temp);
-    Serial.print(" ℃, Humidity: ");
-    if (isnan(hum)) Serial.println("NaN");
-    else Serial.print(hum); Serial.println(" %");
-  }
 }
+
 
 void drawStringWrap(uint8_t col, uint8_t row, const char* str)
 {

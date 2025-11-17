@@ -4,9 +4,11 @@
 #include <U8x8lib.h>
 #include <Ds1302.h>
 
-#define DS1302_CLK 18
-#define DS1302_DAT 19
-#define DS1302_RST 21
+#ifndef PIN_ENA
+#define PIN_ENA 21
+#define PIN_DAT 19
+#define PIN_CLK 18
+#endif
 
 #define LINE_WIDTH 16
 
@@ -32,6 +34,78 @@ enum ButtonMode {
 
 U8X8_SSD1306_128X64_NONAME_HW_I2C u8x8(U8X8_PIN_NONE);
 
+class RTCManager {
+private:
+  Ds1302 rtc;
+  uint8_t lastSecond;
+
+  static const char* WeekDays[7];
+
+public:
+  RTCManager(uint8_t pinCE, uint8_t pinCLK, uint8_t pinDAT)
+    : rtc(pinCE, pinCLK, pinDAT), lastSecond(255) {}
+
+  void begin() {
+    rtc.init();
+
+    if (rtc.isHalted()) {
+      Serial.println("RTC halted. Setting default time...");
+      Ds1302::DateTime dt;
+      dt.year   = 25;
+      dt.month  = 1;
+      dt.day    = 1;
+      dt.hour   = 1;
+      dt.minute = 1;
+      dt.second = 1;
+      dt.dow    = 3;
+
+      rtc.setDateTime(&dt);
+    }
+}
+
+void printIfSecondChanged() {
+  Ds1302::DateTime now;
+  rtc.getDateTime(&now);
+
+  if (now.second != lastSecond) {
+    lastSecond = now.second;
+    printTime(now);
+  }
+}
+
+void getDateTime(Ds1302::DateTime &dt) {
+        rtc.getDateTime(&dt);
+}
+
+private:
+  void printTime(const Ds1302::DateTime& now) {
+    Serial.print("20");
+    if (now.year < 10) Serial.print('0');
+    Serial.print(now.year);
+    Serial.print('-');
+    if (now.month < 10) Serial.print('0');
+    Serial.print(now.month);
+    Serial.print('-');
+    if (now.day < 10) Serial.print('0');
+    Serial.print(now.day);
+    Serial.print(' ');
+    Serial.print(WeekDays[now.dow - 1]);
+    Serial.print(' ');
+    if (now.hour < 10) Serial.print('0');
+    Serial.print(now.hour);
+    Serial.print(':');
+    if (now.minute < 10) Serial.print('0');
+    Serial.print(now.minute);
+    Serial.print(':');
+    if (now.second < 10) Serial.print('0');
+    Serial.print(now.second);
+    Serial.println();
+  }
+};
+const char* RTCManager::WeekDays[7] = {
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
+};
+RTCManager rtcManager(PIN_ENA, PIN_CLK, PIN_DAT);
 
 class Button {
   public:
@@ -248,22 +322,22 @@ private:
   const char **menuItems;
   int menuSize;
   int cursorIndex;
-  bool enterData;
+  uint8_t lastSecond;
 
 public:
   MenuSystem(U8X8_SSD1306_128X64_NONAME_HW_I2C &u8x8, DHT_Display &dht,
              const char* items[], int size)
       : display(u8x8), dhtDisplay(dht),
         currentMode(DATA_MODE), menuItems(items), 
-        menuSize(size), cursorIndex(0){}
+        menuSize(size), cursorIndex(0), lastSecond(255) {}
 
   void begin() {
-  if (currentMode == DATA_MODE) {
-    drawModeScreen(DATA_MODE);
-  } else {
-    drawMainMenu();
+    if (currentMode == DATA_MODE) {
+      drawModeScreen(DATA_MODE);
+    } else {
+      drawMainMenu();
+    }
   }
-}
 
   void update(bool btn1, bool btn2, bool btn3, bool btn4) {
     switch (currentMode) {
@@ -304,7 +378,12 @@ private:
   }
 
   void handleMainMenu(bool btn1, bool btn2, bool btn3) {
-    dhtDisplay.update(false);  
+    dhtDisplay.update(false);
+    Ds1302::DateTime now;
+    rtcManager.getDateTime(now);
+    char buf[11];
+    snprintf(buf, sizeof(buf), "20%02d/%02d/%02d", now.year, now.month, now.day);
+    display.drawString(16, 7, buf);
 
     if (btn2 && cursorIndex > 0) {
       cursorIndex--;
@@ -322,11 +401,25 @@ private:
       }
       drawModeScreen(currentMode);
     }
-}
+  }
 
   void handleDataMode(bool btn4) {
-    dhtDisplay.update(true);
     dhtDisplay.displayLast();
+    Ds1302::DateTime now;
+    rtcManager.getDateTime(now);
+
+    if (now.second != lastSecond) {
+      lastSecond = now.second;
+
+      char buf[17];
+      snprintf(buf, sizeof(buf), "%02d/%02d %02d:%02d:%02d",
+                now.month, now.day, now.hour, now.minute, now.second);
+      display.drawString(0, 1, buf);
+
+      dhtDisplay.update(true);
+      dhtDisplay.displayLast();
+    }
+
     if (btn4) {
       currentMode = MAIN_MENU;
       cursorIndex = 0;
@@ -335,6 +428,20 @@ private:
   }
 
   void handleSetTimeModes(bool btn4) {
+    Ds1302::DateTime now;
+    rtcManager.getDateTime(now);
+
+    if (now.second != lastSecond) {
+      lastSecond = now.second;
+
+      char buf1[11], buf2[9];
+      snprintf(buf1, sizeof(buf1), "20%02d/%02d/%02d", now.year, now.month, now.day);
+      snprintf(buf2, sizeof(buf2), "%02d:%02d:%02d", now.hour, now.minute, now.second);
+
+      display.drawString(0, 1, buf1);
+      display.drawString(0, 2, buf2);
+    }
+
     if (btn4) {
         currentMode = MAIN_MENU;
         cursorIndex = 0;
@@ -352,64 +459,6 @@ MenuSystem menu(u8x8, dhtDisplay, menuItems, menuSize);
 
 void clearLine(uint8_t row);
 
-#ifndef PIN_ENA
-#define PIN_ENA 25
-#define PIN_DAT 26
-#define PIN_CLK 27
-#endif
-
-Ds1302 rtc(PIN_ENA, PIN_CLK, PIN_DAT);
-
-// 星期数组
-const char* WeekDays[] = {
-    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
-};
-
-void setupRTC() {
-    rtc.init();
-
-    if (rtc.isHalted()) {
-        Ds1302::DateTime dt;
-        dt.year   = 25;
-        dt.month  = 1;
-        dt.day    = 1;
-        dt.hour   = 1;
-        dt.minute = 1;
-        dt.second = 1;
-        dt.dow    = 3;
-
-        rtc.setDateTime(&dt);
-    }
-}
-
-void printTime() {
-    Ds1302::DateTime now;
-    rtc.getDateTime(&now);
-
-    Serial.print("20");
-    if (now.year < 10) Serial.print('0');
-    Serial.print(now.year);
-    Serial.print('-');
-    if (now.month < 10) Serial.print('0');
-    Serial.print(now.month);
-    Serial.print('-');
-    if (now.day < 10) Serial.print('0');
-    Serial.print(now.day);
-    Serial.print(' ');
-    Serial.print(WeekDays[now.dow - 1]);
-    Serial.print(' ');
-    if (now.hour < 10) Serial.print('0');
-    Serial.print(now.hour);
-    Serial.print(':');
-    if (now.minute < 10) Serial.print('0');
-    Serial.print(now.minute);
-    Serial.print(':');
-    if (now.second < 10) Serial.print('0');
-    Serial.print(now.second);
-    Serial.println();
-}
-
-
 
 void setup() {
   Serial.begin(115200);
@@ -420,13 +469,17 @@ void setup() {
   u8x8.setFont(u8x8_font_chroma48medium8_r);
   u8x8.clear();
   
+  rtcManager.begin();
+  Serial.println("RTC ready");
+  delay(100);
   dhtDisplay.begin();
+  Serial.println("RTC ready");
+  delay(100);
   menu.begin();
+  Serial.println("OLED Menu ready");
+  delay(100);
 
-  setupRTC();
-
-  Serial.println("Setup ready");
-  
+  Serial.println("All Setup ready");
   delay(1000);
 }
 
@@ -436,20 +489,7 @@ void loop() {
   bool b3 = btn3.update();
   bool b4 = btn4.update();
 
-  static uint8_t last_second = 255; // 不可能的值，保证第一次打印
-    Ds1302::DateTime now;
-    rtc.getDateTime(&now);
-
-    if (now.second != last_second) {
-        last_second = now.second;
-        printTime();
-    }
-
-    delay(50);
-
-  /*
   menu.update(b1, b2, b3, b4);
-  */
 }
 
 

@@ -2,13 +2,18 @@
 #include <DHT.h>
 #include <Wire.h>
 #include <U8x8lib.h>
+#include <RtcDS1302.h>
+
+#define DS1302_CLK 18
+#define DS1302_DAT 19
+#define DS1302_RST 21
 
 #define LINE_WIDTH 16
 
 #define DHTPIN 5
 #define DHTTYPE DHT11
 
-const char* menuItems[] = {"Data", "test1", "test2"};
+const char* menuItems[] = {"Data", "SetTime", "test2"};
 int menuSize = sizeof(menuItems) / sizeof(menuItems[0]);
 
 const int BUTTON1_PIN = 17;
@@ -26,6 +31,105 @@ enum ButtonMode {
 };
 
 U8X8_SSD1306_128X64_NONAME_HW_I2C u8x8(U8X8_PIN_NONE);
+
+class RTC_Display {
+private:
+    ThreeWire myWire;
+    RtcDS1302<ThreeWire> Rtc;
+    uint8_t row;
+    RtcDateTime lastTime;
+    unsigned long lastUpdateMs;
+
+public:
+    RTC_Display(uint8_t pinDAT, uint8_t pinCLK, uint8_t pinRST, uint8_t displayRow)
+        : myWire(pinDAT, pinCLK, pinRST), Rtc(myWire), row(displayRow), lastUpdateMs(0) {}
+
+    void begin() {
+        Rtc.Begin();
+
+        Serial.print("Compiled: ");
+        Serial.print(__DATE__);
+        Serial.print(" ");
+        Serial.println(__TIME__);
+
+        // 编译时间（用于对比）
+        RtcDateTime compiled(__DATE__, __TIME__);
+
+        // 首次检查是否有效
+        if (!Rtc.IsDateTimeValid()) {
+            Serial.println("RTC lost confidence in DateTime! Setting to compile time.");
+            Rtc.SetDateTime(compiled);
+        }
+
+        // 若写保护，解除
+        if (Rtc.GetIsWriteProtected()) {
+            Serial.println("RTC write protected, disabling...");
+            Rtc.SetIsWriteProtected(false);
+        }
+
+        // 若未运行，启动
+        if (!Rtc.GetIsRunning()) {
+            Serial.println("RTC was not running, starting now...");
+            Rtc.SetIsRunning(true);
+        }
+
+        // 当前 RTC 时间
+        RtcDateTime now = Rtc.GetDateTime();
+
+        // 若 RTC 时间比编译时间早 → 设置为编译时间
+        if (now < compiled) {
+            Serial.println("RTC is older than compile time, updating...");
+            Rtc.SetDateTime(compiled);
+        } else if (now > compiled) {
+            Serial.println("RTC is newer than compile time. (OK)");
+        } else {
+            Serial.println("RTC time equals compile time. (OK)");
+        }
+
+        // 再次更新本地时间
+        lastTime = Rtc.GetDateTime();
+    }
+
+    // 每秒更新一次
+    void update() {
+        unsigned long nowMs = millis();
+        if (nowMs - lastUpdateMs >= 1000) {
+            lastUpdateMs = nowMs;
+            lastTime = Rtc.GetDateTime();
+
+            if (!lastTime.IsValid()) {
+                Serial.println("RTC time invalid!!");
+            }
+        }
+    }
+
+    // OLED 显示：MM/DD HH:MM:SS
+    void displayShort(U8X8_SSD1306_128X64_NONAME_HW_I2C &u8x8) {
+        char buf[17];
+        snprintf(buf, sizeof(buf), "%02u/%02u %02u:%02u:%02u",
+                 lastTime.Month(), lastTime.Day(),
+                 lastTime.Hour(), lastTime.Minute(), lastTime.Second());
+
+        char empty[21];
+        memset(empty, ' ', 20);
+        empty[20] = '\0';
+
+        u8x8.drawString(0, row, empty);
+        u8x8.drawString(0, row, buf);
+    }
+
+    // OLED 右侧显示 YYYY/MM/DD
+    void displayFullRight(U8X8_SSD1306_128X64_NONAME_HW_I2C &u8x8, uint8_t r) {
+        char buf[17];
+        snprintf(buf, sizeof(buf), "%04u/%02u/%02u",
+                 lastTime.Year(), lastTime.Month(), lastTime.Day());
+        int col = 16 - strlen(buf);
+        u8x8.drawString(col, r, buf);
+    }
+
+    RtcDateTime getTime() { return lastTime; }
+};
+RTC_Display rtcDisplay(DS1302_DAT, DS1302_CLK, DS1302_RST, 1);
 
 class Button {
   public:
@@ -117,215 +221,234 @@ class Button {
 
 class DHT_Display {
 private:
-    DHT dht;
-    uint8_t row;
-    float lastTemp;
-    float lastHum;
-    unsigned long lastSampleTime;
-    unsigned long lastUpdateTime;
-    float tempSum;
-    float humSum;
-    int sampleCount;
+  DHT dht;
+  uint8_t row;
+  float lastTemp;
+  float lastHum;
+  unsigned long lastSampleTime;
+  unsigned long lastUpdateTime;
+  float tempSum;
+  float humSum;
+  int sampleCount;
 
-    bool fastMode;
-    const unsigned long sampleIntervalSlow = 2500; // 2.5s
-    const unsigned long sampleIntervalFast = 1000; // 1s
-    const unsigned long updateInterval = 5000;     // 5s
-    const float tempThreshold = 3.0;               // ℃
-    const float humThreshold  = 20.0;              // %
+  bool fastMode;
+  const unsigned long sampleIntervalSlow = 2500; // 2.5s
+  const unsigned long sampleIntervalFast = 1000; // 1s
+  const unsigned long updateInterval = 5000;     // 5s
+  const float tempThreshold = 3.0;               // ℃
+  const float humThreshold  = 20.0;              // %
 
 public:
-    DHT_Display(uint8_t pin, uint8_t r) : dht(pin, DHTTYPE), row(r),
-                                          lastTemp(NAN), lastHum(NAN),
-                                          lastSampleTime(0), lastUpdateTime(0),
-                                          tempSum(0), humSum(0), sampleCount(0),
-                                          fastMode(false) {}
+  DHT_Display(uint8_t pin, uint8_t r) : dht(pin, DHTTYPE), row(r),
+                                        lastTemp(NAN), lastHum(NAN),
+                                        lastSampleTime(0), lastUpdateTime(0),
+                                        tempSum(0), humSum(0), sampleCount(0),
+                                        fastMode(false) {}
 
-    void begin() {
-        dht.begin();
+  void begin() {
+    dht.begin();
+  }
+
+  // now takes a flag: if showOnOLED==true then draws to OLED; otherwise only samples + Serial
+  void update(bool showOnOLED) {
+    unsigned long now = millis();
+
+    unsigned long interval = fastMode ? sampleIntervalFast : sampleIntervalSlow;
+    if (now - lastSampleTime >= interval) {
+      lastSampleTime = now;
+      float t = dht.readTemperature();
+      float h = dht.readHumidity();
+      if (!isnan(t)) tempSum += t;
+      if (!isnan(h)) humSum += h;
+      sampleCount++;
     }
 
-    void update() {
-        unsigned long now = millis();
+    if (now - lastUpdateTime >= updateInterval) {
+      lastUpdateTime = now;
 
-        unsigned long interval = fastMode ? sampleIntervalFast : sampleIntervalSlow;
-        if (now - lastSampleTime >= interval) {
-            lastSampleTime = now;
-            float t = dht.readTemperature();
-            float h = dht.readHumidity();
-            if (!isnan(t)) tempSum += t;
-            if (!isnan(h)) humSum += h;
-            sampleCount++;
-        }
+      float avgTemp = NAN;
+      float avgHum  = NAN;
 
-        if (now - lastUpdateTime >= updateInterval) {
-            lastUpdateTime = now;
+      if (sampleCount > 0) {
+        avgTemp = tempSum / sampleCount;
+        avgHum  = humSum  / sampleCount;
+      }
 
-            float avgTemp = NAN;
-            float avgHum  = NAN;
+      char buf[40];
+      snprintf(buf, sizeof(buf), "T=%.1f H=%.1f", avgTemp, avgHum);
+      Serial.println(buf);
 
-            if (sampleCount > 0) {
-                avgTemp = tempSum / sampleCount;
-                avgHum  = humSum  / sampleCount;
-            }
+      if (showOnOLED) {
+        display(avgTemp, avgHum);
+      }
 
-            display(avgTemp, avgHum);
-
-            if (!isnan(avgTemp) && !isnan(avgHum) && !isnan(lastTemp) && !isnan(lastHum)) {
-                if (!fastMode) {
-                    if (abs(avgTemp - lastTemp) > tempThreshold || abs(avgHum - lastHum) > humThreshold) {
-                        fastMode = true;
-                    }
-                } else {
-                    if (abs(avgTemp - lastTemp) <= tempThreshold && abs(avgHum - lastHum) <= humThreshold) {
-                        fastMode = false;
-                    }
-                }
-            }
-
-            if (!isnan(avgTemp)) lastTemp = avgTemp;
-            if (!isnan(avgHum))  lastHum  = avgHum;
-
-            tempSum = 0;
-            humSum = 0;
-            sampleCount = 0;
-        }
-    }
-
-    void display(float temp, float hum) {
-        char buffer[32];
-        if (isnan(temp)) {
-            snprintf(buffer, sizeof(buffer), "T: NaN H: ");
+      if (!isnan(avgTemp) && !isnan(avgHum) && !isnan(lastTemp) && !isnan(lastHum)) {
+        if (!fastMode) {
+          if (abs(avgTemp - lastTemp) > tempThreshold || abs(avgHum - lastHum) > humThreshold) {
+            fastMode = true;
+          }
         } else {
-            snprintf(buffer, sizeof(buffer), "T: %.1f", temp);
+          if (abs(avgTemp - lastTemp) <= tempThreshold && abs(avgHum - lastHum) <= humThreshold) {
+            fastMode = false;
+          }
         }
-        if (isnan(hum)) {
-            strcat(buffer, "NaN%%");
-        } else {
-            char humBuf[16];
-            snprintf(humBuf, sizeof(humBuf), " %.1f%%", hum);
-            strcat(buffer, humBuf);
-        }
+      }
 
-        char empty[21];
-        memset(empty, ' ', 20); empty[20] = '\0';
-        u8x8.drawString(0, row, empty);
-        u8x8.drawString(0, row, buffer);
+      if (!isnan(avgTemp)) lastTemp = avgTemp;
+      if (!isnan(avgHum))  lastHum  = avgHum;
 
-        Serial.println(buffer);
+      tempSum = 0;
+      humSum = 0;
+      sampleCount = 0;
+    }
+  }
+
+  void display(float temp, float hum) {
+    char buffer[32];
+    if (isnan(temp)) {
+      snprintf(buffer, sizeof(buffer), "T: NaN H: ");
+    } else {
+      snprintf(buffer, sizeof(buffer), "T: %.1fC", temp);
+    }
+    if (isnan(hum)) {
+      strcat(buffer, "NaN%%");
+    } else {
+      char humBuf[16];
+      snprintf(humBuf, sizeof(humBuf), " %.1f%%", hum);
+      strcat(buffer, humBuf);
     }
 
-    void displayLast() {
-        display(lastTemp, lastHum);
-    }
+    char empty[21];
+    memset(empty, ' ', 20); empty[20] = '\0';
+    u8x8.drawString(0, row, empty);
+    u8x8.drawString(0, row, buffer);
+  }
+
+  void displayLast() {
+    display(lastTemp, lastHum);
+  }
 };
+DHT_Display dhtDisplay(DHTPIN, 2);
 
 class MenuSystem {
 public:
-    enum Mode {
-        MAIN_MENU,
-        DATA_MODE,
-        TEST1_MODE,
-        TEST2_MODE
-    };
+  enum Mode {
+    MAIN_MENU,
+    DATA_MODE,
+    SETTIME_MODE,
+    TEST2_MODE
+  };
 
 private:
-    U8X8_SSD1306_128X64_NONAME_HW_I2C &display;
-    DHT_Display &dhtDisplay;
-    Mode currentMode;
-    const char **menuItems;
-    int menuSize;
-    int cursorIndex;
-    bool enterData;
+  U8X8_SSD1306_128X64_NONAME_HW_I2C &display;
+  DHT_Display &dhtDisplay;
+  Mode currentMode;
+  const char **menuItems;
+  int menuSize;
+  int cursorIndex;
+  bool enterData;
 
 public:
-    MenuSystem(U8X8_SSD1306_128X64_NONAME_HW_I2C &u8x8, DHT_Display &dht,
-               const char* items[], int size)
-        : display(u8x8), dhtDisplay(dht),
-          currentMode(MAIN_MENU), menuItems(items), menuSize(size),
-          cursorIndex(0), enterData(true) {}
+  MenuSystem(U8X8_SSD1306_128X64_NONAME_HW_I2C &u8x8, DHT_Display &dht,
+             const char* items[], int size)
+      : display(u8x8), dhtDisplay(dht),
+        currentMode(DATA_MODE), menuItems(items), 
+        menuSize(size), cursorIndex(0){}
 
-    void begin() {
-        drawMainMenu();
-    }
+  void begin() {
+  if (currentMode == DATA_MODE) {
+    drawModeScreen(DATA_MODE);
+  } else {
+    drawMainMenu();
+  }
+}
 
-    void update(bool btn1, bool btn2, bool btn3, bool btn4) {
-        switch (currentMode) {
-            case MAIN_MENU:
-                handleMainMenu(btn1, btn2, btn3);
-                break;
-            case DATA_MODE:
-                handleDataMode(btn4);
-                break;
-            case TEST1_MODE:
-            case TEST2_MODE:
-                handleTestModes(btn4);
-                break;
-        }
+  void update(bool btn1, bool btn2, bool btn3, bool btn4) {
+    switch (currentMode) {
+      case MAIN_MENU:
+        handleMainMenu(btn1, btn2, btn3);
+        break;
+      case DATA_MODE:
+        handleDataMode(btn4);
+        break;
+      case SETTIME_MODE:
+        handleSetTimeModes(btn4);
+        break;
+      case TEST2_MODE:
+        break;
     }
+  }
 
 private:
-    void drawMainMenu() {
-        display.clear();
-        display.drawString(0, 0, "   Main Menu");
-        for (int i = 0; i < menuSize; i++) {
-            char buffer[20];
-            snprintf(buffer, sizeof(buffer), "%-12s%s", menuItems[i], 
+  void drawMainMenu() {
+    display.clear();
+    display.drawString(0, 0, "   Main Menu");
+    for (int i = 0; i < menuSize; i++) {
+      char buffer[20];
+      snprintf(buffer, sizeof(buffer), "%-12s%s", menuItems[i], 
               (i == cursorIndex) ? "<-" : "");
-            display.drawString(0, i + 1, buffer);
-        }
+      display.drawString(0, i + 1, buffer);
     }
+    rtcDisplay.displayFullRight(u8x8, menuSize + 1);
+  }
 
-    void drawModeScreen(Mode m) {
-        display.clear();
-        switch (m) {
-            case DATA_MODE: display.drawString(0, 0, "      Data"); break;
-            case TEST1_MODE: display.drawString(0, 0, "    Test1"); break;
-            case TEST2_MODE: display.drawString(0, 0, "    Test2"); break;
-            default: break;
-        }
+  void drawModeScreen(Mode m) {
+    display.clear();
+    switch (m) {
+      case DATA_MODE: display.drawString(0, 0, "      Data"); break;
+      case SETTIME_MODE: display.drawString(0, 0, "   Set Time"); break;
+      case TEST2_MODE: display.drawString(0, 0, "    Test2"); break;
+      default: break;
     }
+  }
 
-    void handleMainMenu(bool btn1, bool btn2, bool btn3) {
-        if (btn2 && cursorIndex > 0) {
-            cursorIndex--;
-            drawMainMenu();
-        }
-        if (btn3 && cursorIndex < menuSize - 1) {
-            cursorIndex++;
-            drawMainMenu();
-        }
-        if (btn1) {
-            switch (cursorIndex) {
-                case 0: currentMode = DATA_MODE; break;
-                case 1: currentMode = TEST1_MODE; break;
-                case 2: currentMode = TEST2_MODE; break;
-            }
-            drawModeScreen(currentMode);
-        }
-    }
+  void handleMainMenu(bool btn1, bool btn2, bool btn3) {
+    dhtDisplay.update(false);  
 
-    void handleDataMode(bool btn4) {
-        dhtDisplay.update();
-        if (enterData) {
-            dhtDisplay.displayLast();
-            enterData = false;
-        }
-        if (btn4) {
-            currentMode = MAIN_MENU;
-            cursorIndex = 0;
-            drawMainMenu();
-            enterData = true;
-        }
+    if (btn2 && cursorIndex > 0) {
+      cursorIndex--;
+      drawMainMenu();
     }
+    if (btn3 && cursorIndex < menuSize - 1) {
+      cursorIndex++;
+      drawMainMenu();
+    }
+    if (btn1) {
+      switch (cursorIndex) {
+        case 0: currentMode = DATA_MODE; break;
+        case 1: currentMode = SETTIME_MODE; break;
+        case 2: currentMode = TEST2_MODE; break;
+      }
+      drawModeScreen(currentMode);
+    }
+}
 
-    void handleTestModes(bool btn4) {
-        if (btn4) {
-            currentMode = MAIN_MENU;
-            cursorIndex = 0;
-            drawMainMenu();
-        }
+  void handleDataMode(bool btn4) {
+    rtcDisplay.update();
+    rtcDisplay.displayShort(u8x8);
+    dhtDisplay.update(true);
+    dhtDisplay.displayLast();
+    if (btn4) {
+      currentMode = MAIN_MENU;
+      cursorIndex = 0;
+      drawMainMenu();
     }
+  }
+
+  void handleSetTimeModes(bool btn4) {
+    rtcDisplay.update();
+    char dateLine[17], timeLine[17];
+    RtcDateTime t = rtcDisplay.getTime();
+    snprintf(dateLine, sizeof(dateLine), "%04u/%02u/%02u", t.Year(), t.Month(), t.Day());
+    snprintf(timeLine, sizeof(timeLine), "%02u:%02u:%02u", t.Hour(), t.Minute(), t.Second());
+    u8x8.drawString(0, 0, dateLine);
+    u8x8.drawString(0, 1, timeLine);
+    if (btn4) {
+        currentMode = MAIN_MENU;
+        cursorIndex = 0;
+        drawMainMenu();
+    }
+  }
 };
 
 Button btn1(BUTTON1_PIN, BUTTON_PULSE);
@@ -333,7 +456,6 @@ Button btn2(BUTTON2_PIN, BUTTON_PULSE);
 Button btn3(BUTTON3_PIN, BUTTON_PULSE);
 Button btn4(BUTTON4_PIN, BUTTON_PULSE);
 
-DHT_Display dhtDisplay(DHTPIN, 2);
 MenuSystem menu(u8x8, dhtDisplay, menuItems, menuSize);
 
 void clearLine(uint8_t row);

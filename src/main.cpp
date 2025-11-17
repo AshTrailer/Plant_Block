@@ -77,6 +77,43 @@ void getDateTime(Ds1302::DateTime &dt) {
         rtc.getDateTime(&dt);
 }
 
+bool getFormattedDate(char *buf, size_t size) {
+  Ds1302::DateTime now;
+  rtc.getDateTime(&now);
+  if (now.second != lastSecond) {
+    lastSecond = now.second;
+    snprintf(buf, size, "20%02d/%02d/%02d", now.year, now.month, now.day);
+    return true; 
+  }
+  return false;
+}
+
+bool getFormattedDateTime(char *bufDate, size_t sizeDate,
+                          char *bufTime, size_t sizeTime) {
+  Ds1302::DateTime now;
+  rtc.getDateTime(&now);
+
+  if (now.second != lastSecond) {
+    lastSecond = now.second;
+    snprintf(bufDate, sizeDate, "20%02d/%02d/%02d", now.year, now.month, now.day);
+    snprintf(bufTime, sizeTime, "%02d:%02d:%02d", now.hour, now.minute, now.second);
+    return true;
+  }
+  return false;
+}
+
+bool getFormattedMonthDayTime(char *buf, size_t size) {
+  Ds1302::DateTime now;
+  rtc.getDateTime(&now);
+  if (now.second != lastSecond) {
+    lastSecond = now.second;
+    snprintf(buf, size, "%02d/%02d %02d:%02d:%02d",
+              now.month, now.day, now.hour, now.minute, now.second);
+    return true;
+  }
+  return false;
+}
+
 private:
   void printTime(const Ds1302::DateTime& now) {
     Serial.print("20");
@@ -287,16 +324,12 @@ public:
       snprintf(buffer, sizeof(buffer), "T: %.1fC", temp);
     }
     if (isnan(hum)) {
-      strcat(buffer, "NaN%%");
+      strcat(buffer, "NaN%");
     } else {
       char humBuf[16];
-      snprintf(humBuf, sizeof(humBuf), " %.1f%%", hum);
+      snprintf(humBuf, sizeof(humBuf), " %.1f%", hum);
       strcat(buffer, humBuf);
     }
-
-    char empty[21];
-    memset(empty, ' ', 20); empty[20] = '\0';
-    u8x8.drawString(0, row, empty);
     u8x8.drawString(0, row, buffer);
   }
 
@@ -306,7 +339,7 @@ public:
 };
 DHT_Display dhtDisplay(DHTPIN, 2);
 
-class MenuSystem {
+class MenuSystem {  
 public:
   enum Mode {
     MAIN_MENU,
@@ -404,21 +437,13 @@ private:
   }
 
   void handleDataMode(bool btn4) {
-    dhtDisplay.displayLast();
-    Ds1302::DateTime now;
-    rtcManager.getDateTime(now);
-
-    if (now.second != lastSecond) {
-      lastSecond = now.second;
-
-      char buf[17];
-      snprintf(buf, sizeof(buf), "%02d/%02d %02d:%02d:%02d",
-                now.month, now.day, now.hour, now.minute, now.second);
+    char buf[17];
+    if (rtcManager.getFormattedMonthDayTime(buf, sizeof(buf))) {
       display.drawString(0, 1, buf);
-
-      dhtDisplay.update(true);
-      dhtDisplay.displayLast();
     }
+
+    dhtDisplay.update(true);
+    dhtDisplay.displayLast();
 
     if (btn4) {
       currentMode = MAIN_MENU;
@@ -428,24 +453,16 @@ private:
   }
 
   void handleSetTimeModes(bool btn4) {
-    Ds1302::DateTime now;
-    rtcManager.getDateTime(now);
-
-    if (now.second != lastSecond) {
-      lastSecond = now.second;
-
-      char buf1[11], buf2[9];
-      snprintf(buf1, sizeof(buf1), "20%02d/%02d/%02d", now.year, now.month, now.day);
-      snprintf(buf2, sizeof(buf2), "%02d:%02d:%02d", now.hour, now.minute, now.second);
-
-      display.drawString(0, 1, buf1);
-      display.drawString(0, 2, buf2);
+    char bufDate[11], bufTime[9];
+    if (rtcManager.getFormattedDateTime(bufDate, sizeof(bufDate), bufTime, sizeof(bufTime))) {
+      display.drawString(0, 1, bufDate);
+      display.drawString(0, 2, bufTime);
     }
 
     if (btn4) {
-        currentMode = MAIN_MENU;
-        cursorIndex = 0;
-        drawMainMenu();
+      currentMode = MAIN_MENU;
+      cursorIndex = 0;
+      drawMainMenu();
     }
   }
 };

@@ -2,7 +2,7 @@
 #include <DHT.h>
 #include <Wire.h>
 #include <U8x8lib.h>
-#include <RtcDS1302.h>
+#include <Ds1302.h>
 
 #define DS1302_CLK 18
 #define DS1302_DAT 19
@@ -32,104 +32,6 @@ enum ButtonMode {
 
 U8X8_SSD1306_128X64_NONAME_HW_I2C u8x8(U8X8_PIN_NONE);
 
-class RTC_Display {
-private:
-    ThreeWire myWire;
-    RtcDS1302<ThreeWire> Rtc;
-    uint8_t row;
-    RtcDateTime lastTime;
-    unsigned long lastUpdateMs;
-
-public:
-    RTC_Display(uint8_t pinDAT, uint8_t pinCLK, uint8_t pinRST, uint8_t displayRow)
-        : myWire(pinDAT, pinCLK, pinRST), Rtc(myWire), row(displayRow), lastUpdateMs(0) {}
-
-    void begin() {
-        Rtc.Begin();
-
-        Serial.print("Compiled: ");
-        Serial.print(__DATE__);
-        Serial.print(" ");
-        Serial.println(__TIME__);
-
-        // 编译时间（用于对比）
-        RtcDateTime compiled(__DATE__, __TIME__);
-
-        // 首次检查是否有效
-        if (!Rtc.IsDateTimeValid()) {
-            Serial.println("RTC lost confidence in DateTime! Setting to compile time.");
-            Rtc.SetDateTime(compiled);
-        }
-
-        // 若写保护，解除
-        if (Rtc.GetIsWriteProtected()) {
-            Serial.println("RTC write protected, disabling...");
-            Rtc.SetIsWriteProtected(false);
-        }
-
-        // 若未运行，启动
-        if (!Rtc.GetIsRunning()) {
-            Serial.println("RTC was not running, starting now...");
-            Rtc.SetIsRunning(true);
-        }
-
-        // 当前 RTC 时间
-        RtcDateTime now = Rtc.GetDateTime();
-
-        // 若 RTC 时间比编译时间早 → 设置为编译时间
-        if (now < compiled) {
-            Serial.println("RTC is older than compile time, updating...");
-            Rtc.SetDateTime(compiled);
-        } else if (now > compiled) {
-            Serial.println("RTC is newer than compile time. (OK)");
-        } else {
-            Serial.println("RTC time equals compile time. (OK)");
-        }
-
-        // 再次更新本地时间
-        lastTime = Rtc.GetDateTime();
-    }
-
-    // 每秒更新一次
-    void update() {
-        unsigned long nowMs = millis();
-        if (nowMs - lastUpdateMs >= 1000) {
-            lastUpdateMs = nowMs;
-            lastTime = Rtc.GetDateTime();
-
-            if (!lastTime.IsValid()) {
-                Serial.println("RTC time invalid!!");
-            }
-        }
-    }
-
-    // OLED 显示：MM/DD HH:MM:SS
-    void displayShort(U8X8_SSD1306_128X64_NONAME_HW_I2C &u8x8) {
-        char buf[17];
-        snprintf(buf, sizeof(buf), "%02u/%02u %02u:%02u:%02u",
-                 lastTime.Month(), lastTime.Day(),
-                 lastTime.Hour(), lastTime.Minute(), lastTime.Second());
-
-        char empty[21];
-        memset(empty, ' ', 20);
-        empty[20] = '\0';
-
-        u8x8.drawString(0, row, empty);
-        u8x8.drawString(0, row, buf);
-    }
-
-    // OLED 右侧显示 YYYY/MM/DD
-    void displayFullRight(U8X8_SSD1306_128X64_NONAME_HW_I2C &u8x8, uint8_t r) {
-        char buf[17];
-        snprintf(buf, sizeof(buf), "%04u/%02u/%02u",
-                 lastTime.Year(), lastTime.Month(), lastTime.Day());
-        int col = 16 - strlen(buf);
-        u8x8.drawString(col, r, buf);
-    }
-
-    RtcDateTime getTime() { return lastTime; }
-};
-RTC_Display rtcDisplay(DS1302_DAT, DS1302_CLK, DS1302_RST, 1);
 
 class Button {
   public:
@@ -389,7 +291,6 @@ private:
               (i == cursorIndex) ? "<-" : "");
       display.drawString(0, i + 1, buffer);
     }
-    rtcDisplay.displayFullRight(u8x8, menuSize + 1);
   }
 
   void drawModeScreen(Mode m) {
@@ -424,8 +325,6 @@ private:
 }
 
   void handleDataMode(bool btn4) {
-    rtcDisplay.update();
-    rtcDisplay.displayShort(u8x8);
     dhtDisplay.update(true);
     dhtDisplay.displayLast();
     if (btn4) {
@@ -436,13 +335,6 @@ private:
   }
 
   void handleSetTimeModes(bool btn4) {
-    rtcDisplay.update();
-    char dateLine[17], timeLine[17];
-    RtcDateTime t = rtcDisplay.getTime();
-    snprintf(dateLine, sizeof(dateLine), "%04u/%02u/%02u", t.Year(), t.Month(), t.Day());
-    snprintf(timeLine, sizeof(timeLine), "%02u:%02u:%02u", t.Hour(), t.Minute(), t.Second());
-    u8x8.drawString(0, 0, dateLine);
-    u8x8.drawString(0, 1, timeLine);
     if (btn4) {
         currentMode = MAIN_MENU;
         cursorIndex = 0;
@@ -460,6 +352,63 @@ MenuSystem menu(u8x8, dhtDisplay, menuItems, menuSize);
 
 void clearLine(uint8_t row);
 
+#ifndef PIN_ENA
+#define PIN_ENA 25
+#define PIN_DAT 26
+#define PIN_CLK 27
+#endif
+
+Ds1302 rtc(PIN_ENA, PIN_CLK, PIN_DAT);
+
+// 星期数组
+const char* WeekDays[] = {
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
+};
+
+void setupRTC() {
+    rtc.init();
+
+    if (rtc.isHalted()) {
+        Ds1302::DateTime dt;
+        dt.year   = 25;
+        dt.month  = 1;
+        dt.day    = 1;
+        dt.hour   = 1;
+        dt.minute = 1;
+        dt.second = 1;
+        dt.dow    = 3;
+
+        rtc.setDateTime(&dt);
+    }
+}
+
+void printTime() {
+    Ds1302::DateTime now;
+    rtc.getDateTime(&now);
+
+    Serial.print("20");
+    if (now.year < 10) Serial.print('0');
+    Serial.print(now.year);
+    Serial.print('-');
+    if (now.month < 10) Serial.print('0');
+    Serial.print(now.month);
+    Serial.print('-');
+    if (now.day < 10) Serial.print('0');
+    Serial.print(now.day);
+    Serial.print(' ');
+    Serial.print(WeekDays[now.dow - 1]);
+    Serial.print(' ');
+    if (now.hour < 10) Serial.print('0');
+    Serial.print(now.hour);
+    Serial.print(':');
+    if (now.minute < 10) Serial.print('0');
+    Serial.print(now.minute);
+    Serial.print(':');
+    if (now.second < 10) Serial.print('0');
+    Serial.print(now.second);
+    Serial.println();
+}
+
 
 
 void setup() {
@@ -474,6 +423,8 @@ void setup() {
   dhtDisplay.begin();
   menu.begin();
 
+  setupRTC();
+
   Serial.println("Setup ready");
   
   delay(1000);
@@ -485,7 +436,20 @@ void loop() {
   bool b3 = btn3.update();
   bool b4 = btn4.update();
 
+  static uint8_t last_second = 255; // 不可能的值，保证第一次打印
+    Ds1302::DateTime now;
+    rtc.getDateTime(&now);
+
+    if (now.second != last_second) {
+        last_second = now.second;
+        printTime();
+    }
+
+    delay(50);
+
+  /*
   menu.update(b1, b2, b3, b4);
+  */
 }
 
 

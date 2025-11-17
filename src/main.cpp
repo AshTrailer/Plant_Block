@@ -1,120 +1,138 @@
 #include <Arduino.h>
-
-#include <LiquidCrystal.h>
 #include <DHT.h>
 
-/* --- LCD (16x2, parallel) --- */
-const int rs = 12, en = 11, d4 = 5, d5 = 4, d6 = 3, d7 = 2;
-LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+const int BUTTON1_PIN = 16;
+const int BUTTON2_PIN = 4;
+const int BUTTON3_PIN = 2;
+const int BUTTON4_PIN = 15;
 
-/* --- DHT11 --- */
-#define DHTPIN   7
-#define DHTTYPE  DHT11
-DHT dht(DHTPIN, DHTTYPE);
+const int LED_PIN = 23;
 
-/* --- Sensors --- */
-const int SOIL1_PIN = A0;
-const int SOIL2_PIN = A1;
-const int LDR_PIN   = A2;
+const unsigned long BUTTON4_DEBOUNCE_MS = 50;
+const unsigned long BUTTON4_REPEAT_MS   = 200;
 
-/* --- Single calibration for both soil probes (simplified) --- */
-const int airVal   = 430;   // very dry
-const int waterVal = 150;   // fully wet
+enum ButtonMode {
+  BUTTON_TOGGLE,
+  BUTTON_HOLD,
+  BUTTON_PULSE,
+  BUTTON_REPEAT
+};
 
-/* --- Timing --- */
-unsigned long lastDhtMs   = 0;
-unsigned long lastPageMs  = 0;
-const unsigned long DHT_PERIOD_MS  = 2000;
-const unsigned long PAGE_PERIOD_MS = 5000;
+class Button {
+  public:
+    Button(int pin, ButtonMode mode, unsigned long debounce = 20, unsigned long repeatInterval = 500)
+      : _pin(pin), _mode(mode), _debounce(debounce), _repeatInterval(repeatInterval),
+        _lastState(HIGH), _buttonState(HIGH), _lastDebounceTime(0),
+        _output(false), _lastOutputTime(0) {
+      pinMode(pin, INPUT_PULLUP);
+    }
 
-float T = NAN, H = NAN;     // latest DHT values
-bool showPageA = true;      // toggle display pages
-static unsigned long lastPrint = 0; 
+    bool update() {
+      bool reading = digitalRead(_pin);
 
-int soilPercentFromRaw(int raw) {
-  long span = (long)airVal - (long)waterVal;   // e.g. 430-150=280
-  if (span <= 0) return 0;
-  long val = (long)airVal - raw;
-  int pct = (int)(100L * val / span);
-  if (pct < 0) pct = 0; if (pct > 100) pct = 100;
-  return pct;
-}
+      debounceCheck(reading);
 
-void clearTail(uint8_t printed) {
-  for (uint8_t i = printed; i < 16; i++) lcd.print(' ');
-}
+      if ((millis() - _lastDebounceTime) > _debounce) {
+        bool lastLogic = _buttonState;
+        _buttonState = reading;
+
+        switch (_mode) {
+          case BUTTON_TOGGLE:
+            handleToggle(lastLogic);
+            break;
+
+          case BUTTON_HOLD:
+            handleHold();
+            break;
+
+          case BUTTON_PULSE:
+            handlePulse(lastLogic);
+            break;
+
+          case BUTTON_REPEAT:
+            handleRepeat();
+            break;
+        }
+      }
+
+      _lastState = reading;
+      return _output;
+    }
+
+  private:
+    int _pin;
+    ButtonMode _mode;
+    unsigned long _debounce;
+    unsigned long _repeatInterval;
+
+    bool _lastState;
+    bool _buttonState;
+    unsigned long _lastDebounceTime;
+
+    bool _output;
+    unsigned long _lastOutputTime;
+
+    void debounceCheck(bool reading) {
+      if (reading != _lastState) {
+        _lastDebounceTime = millis();
+      }
+    }
+
+    void handleToggle(bool lastLogic) {
+      if (lastLogic == HIGH && _buttonState == LOW) {
+        _output = !_output;
+      }
+    }
+
+    void handleHold() {
+      _output = (_buttonState == LOW);
+    }
+
+    void handlePulse(bool lastLogic) {
+      _output = (lastLogic == HIGH && _buttonState == LOW);
+    }
+
+    void handleRepeat() {
+      if (_buttonState == LOW) {
+        if (millis() - _lastOutputTime >= _repeatInterval) {
+          _output = true;
+          _lastOutputTime = millis();
+        } else {
+          _output = false;
+        }
+      } else {
+        _output = false;
+      }
+    }
+};
+
+Button btn1(BUTTON1_PIN, BUTTON_TOGGLE);
+Button btn2(BUTTON2_PIN, BUTTON_HOLD);
+Button btn3(BUTTON3_PIN, BUTTON_PULSE);
+Button btn4(BUTTON4_PIN, BUTTON_REPEAT, BUTTON4_DEBOUNCE_MS, BUTTON4_REPEAT_MS);
 
 void setup() {
-  Serial.begin(9600);
-  dht.begin();
-  lcd.begin(16, 2);
-  lcd.print("Sensors Ready");
-  delay(800);
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  Serial.println("Button test ready.");
 }
 
 void loop() {
-  unsigned long now = millis();
+  bool btn1Out = btn1.update();
+  bool btn2Out = btn2.update();
+  bool btn3Out = btn3.update();
+  bool btn4Out = btn4.update();
 
-  int soil1Pct = soilPercentFromRaw(analogRead(SOIL1_PIN));
-  int soil2Pct = soilPercentFromRaw(analogRead(SOIL2_PIN));
-  int lightPct = map(analogRead(LDR_PIN), 0, 1023, 0, 100);
+  if (btn1Out) Serial.println("Button 1 TOGGLE");
+  if (btn2Out) Serial.println("Button 2 HOLD");
+  if (btn3Out) Serial.println("Button 3 PULSE");
+  if (btn4Out) Serial.println("Button 4 REPEAT");
 
-  if (now - lastDhtMs >= DHT_PERIOD_MS) {
-    lastDhtMs = now;
-    float h = dht.readHumidity();
-    float t = dht.readTemperature();
-    if (!isnan(h) && !isnan(t)) { H = h; T = t; }
-  }
-
-  if (now - lastPageMs >= PAGE_PERIOD_MS) {
-    lastPageMs = now;
-    showPageA = !showPageA;
-    lcd.clear();
-  }
-
-  if (showPageA) {
-    lcd.setCursor(0, 0);
-    lcd.print("S1:"); lcd.print(soil1Pct); lcd.print("% ");
-    lcd.print("S2:"); lcd.print(soil2Pct); lcd.print("%");
-
-
-    lcd.setCursor(0, 1);
-    lcd.print("L:"); lcd.print(lightPct); lcd.print("%");
-    clearTail( (uint8_t) (2 + (lightPct>=100?3:(lightPct>=10?2:1)) + 1) );
+  if (btn3Out) {
+    digitalWrite(LED_PIN, HIGH);
   } else {
-    lcd.setCursor(0, 0);
-    lcd.print("T:");
-    if (!isnan(T)) lcd.print(T, 1); else lcd.print("--.-");
-    lcd.print("C  H:");
-    if (!isnan(H)) { lcd.print((int)H); lcd.print('%'); } else lcd.print("--%");
-    clearTail(16);
-
-    lcd.setCursor(0, 1);
-    lcd.print("L:"); lcd.print(lightPct); lcd.print("%");
-    clearTail(16);
+    digitalWrite(LED_PIN, LOW);
   }
-  
-  if (now - lastPrint >= 5000) {
-    lastPrint = now;
-
-    Serial.println();
-    Serial.print("Temperature: ");
-    if (!isnan(T)) Serial.print(T, 2); else Serial.print("N/A");
-    Serial.print(" °C,  Humidity: ");
-    if (!isnan(H)) Serial.print(H, 1); else Serial.print("N/A");
-    Serial.print("%,  Soil1: ");
-    Serial.print(soil1Pct);
-    Serial.print("%,  Soil2: ");
-    Serial.print(soil2Pct);
-    Serial.print("%,  Light: ");
-    Serial.print(lightPct);
-    Serial.println("%");
-  }
-
-
-
-  delay(150);
 }
-
-
-

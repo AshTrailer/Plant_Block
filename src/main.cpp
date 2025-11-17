@@ -8,11 +8,13 @@
 #define DHTPIN 5
 #define DHTTYPE DHT11
 
+const char* menuItems[] = {"Data", "test1", "test2"};
+int menuSize = sizeof(menuItems) / sizeof(menuItems[0]);
+
 const int BUTTON1_PIN = 17;
 const int BUTTON2_PIN = 16;
 const int BUTTON3_PIN = 4;
 const int BUTTON4_PIN = 15;
-
 const unsigned long BUTTON4_DEBOUNCE_MS = 50;
 const unsigned long BUTTON4_REPEAT_MS   = 200;
 
@@ -212,6 +214,118 @@ public:
 
         Serial.println(buffer);
     }
+
+    void displayLast() {
+        display(lastTemp, lastHum);
+    }
+};
+
+class MenuSystem {
+public:
+    enum Mode {
+        MAIN_MENU,
+        DATA_MODE,
+        TEST1_MODE,
+        TEST2_MODE
+    };
+
+private:
+    U8X8_SSD1306_128X64_NONAME_HW_I2C &display;
+    DHT_Display &dhtDisplay;
+    Mode currentMode;
+    const char **menuItems;
+    int menuSize;
+    int cursorIndex;
+    bool enterData;
+
+public:
+    MenuSystem(U8X8_SSD1306_128X64_NONAME_HW_I2C &u8x8, DHT_Display &dht,
+               const char* items[], int size)
+        : display(u8x8), dhtDisplay(dht),
+          currentMode(MAIN_MENU), menuItems(items), menuSize(size),
+          cursorIndex(0), enterData(true) {}
+
+    void begin() {
+        drawMainMenu();
+    }
+
+    void update(bool btn1, bool btn2, bool btn3, bool btn4) {
+        switch (currentMode) {
+            case MAIN_MENU:
+                handleMainMenu(btn1, btn2, btn3);
+                break;
+            case DATA_MODE:
+                handleDataMode(btn4);
+                break;
+            case TEST1_MODE:
+            case TEST2_MODE:
+                handleTestModes(btn4);
+                break;
+        }
+    }
+
+private:
+    void drawMainMenu() {
+        display.clear();
+        display.drawString(0, 0, "   Main Menu");
+        for (int i = 0; i < menuSize; i++) {
+            char buffer[20];
+            snprintf(buffer, sizeof(buffer), "%-12s%s", menuItems[i], 
+              (i == cursorIndex) ? "<-" : "");
+            display.drawString(0, i + 1, buffer);
+        }
+    }
+
+    void drawModeScreen(Mode m) {
+        display.clear();
+        switch (m) {
+            case DATA_MODE: display.drawString(0, 0, "      Data"); break;
+            case TEST1_MODE: display.drawString(0, 0, "    Test1"); break;
+            case TEST2_MODE: display.drawString(0, 0, "    Test2"); break;
+            default: break;
+        }
+    }
+
+    void handleMainMenu(bool btn1, bool btn2, bool btn3) {
+        if (btn2 && cursorIndex > 0) {
+            cursorIndex--;
+            drawMainMenu();
+        }
+        if (btn3 && cursorIndex < menuSize - 1) {
+            cursorIndex++;
+            drawMainMenu();
+        }
+        if (btn1) {
+            switch (cursorIndex) {
+                case 0: currentMode = DATA_MODE; break;
+                case 1: currentMode = TEST1_MODE; break;
+                case 2: currentMode = TEST2_MODE; break;
+            }
+            drawModeScreen(currentMode);
+        }
+    }
+
+    void handleDataMode(bool btn4) {
+        dhtDisplay.update();
+        if (enterData) {
+            dhtDisplay.displayLast();
+            enterData = false;
+        }
+        if (btn4) {
+            currentMode = MAIN_MENU;
+            cursorIndex = 0;
+            drawMainMenu();
+            enterData = true;
+        }
+    }
+
+    void handleTestModes(bool btn4) {
+        if (btn4) {
+            currentMode = MAIN_MENU;
+            cursorIndex = 0;
+            drawMainMenu();
+        }
+    }
 };
 
 Button btn1(BUTTON1_PIN, BUTTON_PULSE);
@@ -219,17 +333,15 @@ Button btn2(BUTTON2_PIN, BUTTON_PULSE);
 Button btn3(BUTTON3_PIN, BUTTON_PULSE);
 Button btn4(BUTTON4_PIN, BUTTON_PULSE);
 
-DHT_Display dhtDisplay(DHTPIN, 0);
+DHT_Display dhtDisplay(DHTPIN, 2);
+MenuSystem menu(u8x8, dhtDisplay, menuItems, menuSize);
 
-void drawStringWrap(uint8_t col, uint8_t row, const char* str);
 void clearLine(uint8_t row);
 
 
 
 void setup() {
   Serial.begin(115200);
-
-  Serial.println("Button test ready.");
 
   Wire.begin(22, 23);  // SDA=21, SCL=22
 
@@ -238,37 +350,23 @@ void setup() {
   u8x8.clear();
   
   dhtDisplay.begin();
+  menu.begin();
 
-  delay(50);
+  Serial.println("Setup ready");
+  
+  delay(1000);
 }
 
 void loop() {
-  bool btn1Out = btn1.update();
-  bool btn2Out = btn2.update();
-  bool btn3Out = btn3.update(); 
-  bool btn4Out = btn4.update();
+  bool b1 = btn1.update();
+  bool b2 = btn2.update();
+  bool b3 = btn3.update();
+  bool b4 = btn4.update();
 
-  dhtDisplay.update();
-
+  menu.update(b1, b2, b3, b4);
 }
 
 
-void drawStringWrap(uint8_t col, uint8_t row, const char* str)
-{
-    const uint8_t maxCols = 16; 
-    uint8_t line = row;
-    uint8_t colIndex = col;
-
-    for (int i = 0; str[i] != '\0'; i++) {
-        if (colIndex >= maxCols) {
-            colIndex = 0;
-            line++;
-        }
-        u8x8.setCursor(colIndex, line);
-        u8x8.write(str[i]);
-        colIndex++;
-    }
-}
 
 void clearLine(uint8_t row) {
   char empty[LINE_WIDTH + 1];

@@ -4,6 +4,9 @@
 #include <U8x8lib.h>
 #include <Ds1302.h>
 
+#define PIN_SDA 22
+#define PIN_SCL 23
+
 #ifndef PIN_ENA
 #define PIN_ENA 21
 #define PIN_DAT 19
@@ -15,7 +18,7 @@
 #define DHTPIN 5
 #define DHTTYPE DHT11
 
-const char* menuItems[] = {"Data", "SetTime", "test2"};
+const char* menuItems[] = {"Data", "SetTime"};
 int menuSize = sizeof(menuItems) / sizeof(menuItems[0]);
 
 const int BUTTON1_PIN = 17;
@@ -49,15 +52,15 @@ public:
     rtc.init();
 
     if (rtc.isHalted()) {
-      Serial.println("RTC halted. Setting default time...");
+      Serial.println("Setting default time...");
       Ds1302::DateTime dt;
       dt.year   = 25;
-      dt.month  = 1;
-      dt.day    = 1;
-      dt.hour   = 1;
-      dt.minute = 1;
-      dt.second = 1;
-      dt.dow    = 3;
+      dt.month  = 11;
+      dt.day    = 18;
+      dt.hour   = 19;
+      dt.minute = 18;
+      dt.second = 30;
+      dt.dow    = 4;
 
       rtc.setDateTime(&dt);
     }
@@ -112,6 +115,11 @@ bool getFormattedMonthDayTime(char *buf, size_t size) {
     return true;
   }
   return false;
+}
+
+void setDateTime(const Ds1302::DateTime &dt) {
+  Ds1302::DateTime temp = dt;
+  rtc.setDateTime(&temp);
 }
 
 private:
@@ -381,7 +389,7 @@ public:
         handleDataMode(btn4);
         break;
       case SETTIME_MODE:
-        handleSetTimeModes(btn4);
+        handleSetTimeModes(btn1, btn2, btn3, btn4);
         break;
       case TEST2_MODE:
         break;
@@ -389,6 +397,7 @@ public:
   }
 
 private:
+  Ds1302::DateTime timeSnapshot;
   void drawMainMenu() {
     display.clear();
     display.drawString(0, 0, "   Main Menu");
@@ -404,8 +413,7 @@ private:
     display.clear();
     switch (m) {
       case DATA_MODE: display.drawString(0, 0, "      Data"); break;
-      case SETTIME_MODE: display.drawString(0, 0, "   Set Time"); break;
-      case TEST2_MODE: display.drawString(0, 0, "    Test2"); break;
+      case SETTIME_MODE: display.drawString(0, 0, "    Set Time"); break;
       default: break;
     }
   }
@@ -428,9 +436,16 @@ private:
     }
     if (btn1) {
       switch (cursorIndex) {
-        case 0: currentMode = DATA_MODE; break;
-        case 1: currentMode = SETTIME_MODE; break;
-        case 2: currentMode = TEST2_MODE; break;
+        case 0: 
+          currentMode = DATA_MODE; 
+          break;
+        case 1: 
+          rtcManager.getDateTime(timeSnapshot);
+          currentMode = SETTIME_MODE;
+          break;
+        case 2: 
+          currentMode = TEST2_MODE; 
+          break;
       }
       drawModeScreen(currentMode);
     }
@@ -452,19 +467,77 @@ private:
     }
   }
 
-  void handleSetTimeModes(bool btn4) {
+  void handleSetTimeModes(bool btn1, bool btn2, bool btn3, bool btn4) {
+    static int editIndex = 0;
+
+    if (btn2 && editIndex > 0) editIndex--;
+    if (btn3 && editIndex < 11) editIndex++;
+
+    if (btn1) {
+      uint8_t *digits[6] = {
+          &timeSnapshot.year, &timeSnapshot.month, &timeSnapshot.day,
+          &timeSnapshot.hour, &timeSnapshot.minute, &timeSnapshot.second
+      };
+      int valueIndex = editIndex / 2;
+      int digitPos = editIndex % 2;
+      int v = *digits[valueIndex];
+      int tens = v / 10;
+      int ones = v % 10;
+
+      if (digitPos == 0) tens++;
+      else ones++;
+
+      switch (valueIndex) {
+        case 0: // year (0~99)
+          if (tens > 9) tens = 0;
+          if (ones > 9) ones = 0;
+          break;
+        case 1: // month (1~12)
+          int month = tens * 10 + ones;
+          if (month > 12) { tens = 0; ones = 1; }  // back to 01
+          if (month < 1) { tens = 0; ones = 1; }
+          break;
+        case 2: // day (1~maxDay)
+          int day = tens * 10 + ones;
+          int year = timeSnapshot.year + 2000;
+          int month = timeSnapshot.month;
+          int maxDay = 31;
+          if (month == 2) maxDay = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 29 : 28;
+          else if (month == 4 || month == 6 || month == 9 || month == 11) maxDay = 30;
+
+          if (day > maxDay) { tens = 0; ones = 1; } 
+          if (day < 1) { tens = 0; ones = 1; }
+          break;
+        case 3: // hour (0~23)
+          if (tens * 10 + ones > 23) { tens = 0; ones = 0; }
+          break;
+        case 4: // minute (0~59)
+        case 5: // second (0~59)
+          if (tens * 10 + ones > 59) { tens = 0; ones = 0; }
+          break;
+      }
+
+      *digits[valueIndex] = tens * 10 + ones;
+  }
+
     char bufDate[11], bufTime[9];
-    if (rtcManager.getFormattedDateTime(bufDate, sizeof(bufDate), bufTime, sizeof(bufTime))) {
-      display.drawString(0, 1, bufDate);
-      display.drawString(0, 2, bufTime);
-    }
+    snprintf(bufDate, sizeof(bufDate), "20%02d/%02d/%02d",
+             timeSnapshot.year, timeSnapshot.month, timeSnapshot.day);
+    snprintf(bufTime, sizeof(bufTime), "%02d:%02d:%02d",
+             timeSnapshot.hour, timeSnapshot.minute, timeSnapshot.second);
+
+    display.drawString(0, 1, bufDate);
+    display.drawString(0, 2, bufTime);
 
     if (btn4) {
-      currentMode = MAIN_MENU;
-      cursorIndex = 0;
-      drawMainMenu();
+        rtcManager.setDateTime(timeSnapshot);
+        editIndex = 0;
+        currentMode = MAIN_MENU;
+        cursorIndex = 0;
+        drawMainMenu();
     }
   }
+
 };
 
 Button btn1(BUTTON1_PIN, BUTTON_PULSE);
@@ -480,7 +553,7 @@ void clearLine(uint8_t row);
 void setup() {
   Serial.begin(115200);
 
-  Wire.begin(22, 23);  // SDA=21, SCL=22
+  Wire.begin(22, 23);  // SDA=22, SCL=23
 
   u8x8.begin();
   u8x8.setFont(u8x8_font_chroma48medium8_r);

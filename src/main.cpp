@@ -7,6 +7,9 @@
 #define PIN_SDA 22
 #define PIN_SCL 23
 
+#define PIN_SOILSENSOR_1 32
+#define PIN_SOILSENSOR_2 33
+
 #ifndef PIN_ENA
 #define PIN_ENA 21
 #define PIN_DAT 19
@@ -151,6 +154,40 @@ const char* RTCManager::WeekDays[7] = {
     "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"
 };
 RTCManager rtcManager(PIN_ENA, PIN_CLK, PIN_DAT);
+
+class SoilSensor {
+private:
+    uint8_t pin;
+    float voltageSum;
+    uint8_t sampleCount;
+    float lastVoltage;
+
+public:
+    SoilSensor(uint8_t p) : pin(p), voltageSum(0), sampleCount(0), lastVoltage(0) {}
+
+    void begin() {
+      pinMode(pin, INPUT);
+    }
+
+    void update() {
+        int raw = analogRead(pin);
+        float v = raw * 3.0 / 4095.0;
+        voltageSum += v;
+        sampleCount++;
+    }
+
+    void calcAverage() {
+        if (sampleCount > 0) {
+            lastVoltage = voltageSum / sampleCount;
+            voltageSum = 0;
+            sampleCount = 0;
+        }
+    }
+
+    float getVoltage() const {
+        return lastVoltage;
+    }
+};
 
 class Button {
   public:
@@ -335,7 +372,7 @@ public:
       strcat(buffer, "NaN%");
     } else {
       char humBuf[16];
-      snprintf(humBuf, sizeof(humBuf), " %.1f%", hum);
+      snprintf(humBuf, sizeof(humBuf), "H: %.1f%", hum);
       strcat(buffer, humBuf);
     }
     u8x8.drawString(0, row, buffer);
@@ -364,15 +401,22 @@ private:
   int menuSize;
   int cursorIndex;
   uint8_t lastSecond;
+  SoilSensor sensor1;
+  SoilSensor sensor2;
+  unsigned long lastSoilUpdate = 0;
+  unsigned long lastSoilDisplay = 0;
 
 public:
   MenuSystem(U8X8_SSD1306_128X64_NONAME_HW_I2C &u8x8, DHT_Display &dht,
              const char* items[], int size)
       : display(u8x8), dhtDisplay(dht),
         currentMode(DATA_MODE), menuItems(items), 
-        menuSize(size), cursorIndex(0), lastSecond(255) {}
+        menuSize(size), cursorIndex(0), lastSecond(255),
+        sensor1(PIN_SOILSENSOR_1), sensor2(PIN_SOILSENSOR_2) {}
 
   void begin() {
+    sensor1.begin();
+    sensor2.begin();
     if (currentMode == DATA_MODE) {
       drawModeScreen(DATA_MODE);
     } else {
@@ -457,6 +501,31 @@ private:
       display.drawString(0, 1, buf);
     }
 
+    unsigned long nowMillis = millis();
+
+    if (nowMillis - lastSoilUpdate >= 1000) {
+      lastSoilUpdate = nowMillis;
+      sensor1.update();
+      sensor2.update();
+    }
+    if (nowMillis - lastSoilDisplay >= 5000) {
+      lastSoilDisplay = nowMillis;
+
+      char buf[17];
+
+      dhtDisplay.update(true);
+      dhtDisplay.displayLast();
+
+      sensor1.calcAverage();
+      sensor2.calcAverage();
+
+      snprintf(buf, sizeof(buf), "1: %.2fV", sensor1.getVoltage());
+      display.drawString(0, 3, buf);
+
+      snprintf(buf, sizeof(buf), "2: %.2fV", sensor2.getVoltage());
+      display.drawString(0, 4, buf);
+    }
+
     dhtDisplay.update(true);
     dhtDisplay.displayLast();
 
@@ -493,11 +562,14 @@ private:
           if (ones > 9) ones = 0;
           break;
         case 1: // month (1~12)
+          {
           int month = tens * 10 + ones;
           if (month > 12) { tens = 0; ones = 1; }  // back to 01
           if (month < 1) { tens = 0; ones = 1; }
+          }
           break;
         case 2: // day (1~maxDay)
+          {
           int day = tens * 10 + ones;
           int year = timeSnapshot.year + 2000;
           int month = timeSnapshot.month;
@@ -507,6 +579,7 @@ private:
 
           if (day > maxDay) { tens = 0; ones = 1; } 
           if (day < 1) { tens = 0; ones = 1; }
+          }
           break;
         case 3: // hour (0~23)
           if (tens * 10 + ones > 23) { tens = 0; ones = 0; }

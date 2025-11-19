@@ -4,6 +4,8 @@
 #include <U8x8lib.h>
 #include <Ds1302.h>
 
+#define PUMP_PIN 26
+
 #define PIN_SDA 22
 #define PIN_SCL 23
 
@@ -28,6 +30,9 @@ const int BUTTON1_PIN = 17;
 const int BUTTON2_PIN = 16;
 const int BUTTON3_PIN = 4;
 const int BUTTON4_PIN = 15;
+
+const int BUTTON5_PIN = 12;
+
 const unsigned long BUTTON4_DEBOUNCE_MS = 50;
 const unsigned long BUTTON4_REPEAT_MS   = 200;
 
@@ -158,35 +163,72 @@ RTCManager rtcManager(PIN_ENA, PIN_CLK, PIN_DAT);
 class SoilSensor {
 private:
     uint8_t pin;
+    uint8_t displayRow;
+    U8X8_SSD1306_128X64_NONAME_HW_I2C &display;
+
+    unsigned long lastSampleTime;
+    unsigned long lastUpdateTime;
+
     float voltageSum;
-    uint8_t sampleCount;
+    uint16_t sampleCount;
+
     float lastVoltage;
+    float lastMoisture;
+
+    const float a = -1.176;
+    const float b = 1.77;
+    const float moistureError = 8.0f; // ±8%
 
 public:
-    SoilSensor(uint8_t p) : pin(p), voltageSum(0), sampleCount(0), lastVoltage(0) {}
+    SoilSensor(uint8_t p, uint8_t row, U8X8_SSD1306_128X64_NONAME_HW_I2C &disp)
+        : pin(p), displayRow(row), display(disp),
+          lastSampleTime(0), lastUpdateTime(0),
+          voltageSum(0), sampleCount(0),
+          lastVoltage(0), lastMoisture(0) {}
 
     void begin() {
-      pinMode(pin, INPUT);
+        pinMode(pin, INPUT);
     }
 
-    void update() {
-        int raw = analogRead(pin);
-        float v = raw * 3.0 / 4095.0;
-        voltageSum += v;
-        sampleCount++;
-    }
+    void update(bool showOnOLED) {
+        unsigned long now = millis();
+        if (now - lastSampleTime >= 1000) {
+            lastSampleTime = now;
+            int raw = analogRead(pin);
+            float v = raw * 3.0f / 4095.0f;
+            voltageSum += v;
+            sampleCount++;
+        }
 
-    void calcAverage() {
-        if (sampleCount > 0) {
-            lastVoltage = voltageSum / sampleCount;
-            voltageSum = 0;
-            sampleCount = 0;
+        if (now - lastUpdateTime >= 5000) {
+            lastUpdateTime = now;
+            if (sampleCount > 0) {
+                lastVoltage = voltageSum / sampleCount;
+                voltageSum = 0;
+                sampleCount = 0;
+
+                float h = (lastVoltage - b) / a;
+                if (h < 0) h = 0;
+                if (h > 1) h = 1;
+                lastMoisture = h * 100.0f;
+            }
+
+            if (showOnOLED) displayLast();
         }
     }
 
-    float getVoltage() const {
-        return lastVoltage;
+    void displayLast() {
+        char buf[20];
+        snprintf(buf, sizeof(buf),
+                 "M%d: %.1f%% (%.0f%%)",
+                 (displayRow - 2),
+                 lastMoisture,
+                 moistureError);
+        display.drawString(0, displayRow, buf);
     }
+
+    float getVoltage() const { return lastVoltage; }
+    float getMoisture() const { return lastMoisture; }
 };
 
 class Button {
@@ -366,13 +408,13 @@ public:
     if (isnan(temp)) {
       snprintf(buffer, sizeof(buffer), "T: NaN H: ");
     } else {
-      snprintf(buffer, sizeof(buffer), "T: %.1fC", temp);
+      snprintf(buffer, sizeof(buffer), "T: %.1f", temp);
     }
     if (isnan(hum)) {
       strcat(buffer, "NaN%");
     } else {
       char humBuf[16];
-      snprintf(humBuf, sizeof(humBuf), "H: %.1f%", hum);
+      snprintf(humBuf, sizeof(humBuf), " H: %.1f%", hum);
       strcat(buffer, humBuf);
     }
     u8x8.drawString(0, row, buffer);
@@ -407,12 +449,20 @@ private:
   unsigned long lastSoilDisplay = 0;
 
 public:
-  MenuSystem(U8X8_SSD1306_128X64_NONAME_HW_I2C &u8x8, DHT_Display &dht,
-             const char* items[], int size)
-      : display(u8x8), dhtDisplay(dht),
-        currentMode(DATA_MODE), menuItems(items), 
-        menuSize(size), cursorIndex(0), lastSecond(255),
-        sensor1(PIN_SOILSENSOR_1), sensor2(PIN_SOILSENSOR_2) {}
+  MenuSystem(U8X8_SSD1306_128X64_NONAME_HW_I2C &u8x8,
+           DHT_Display &dht,
+           const char* items[], int size)
+    : display(u8x8),
+      dhtDisplay(dht),
+      currentMode(DATA_MODE),
+      menuItems(items),
+      menuSize(size),
+      cursorIndex(0),
+      lastSecond(255),
+      sensor1(PIN_SOILSENSOR_1, 3, u8x8),
+      sensor2(PIN_SOILSENSOR_2, 4, u8x8)
+  {}
+
 
   void begin() {
     sensor1.begin();
@@ -496,43 +546,25 @@ private:
   }
 
   void handleDataMode(bool btn4) {
+
     char buf[17];
     if (rtcManager.getFormattedMonthDayTime(buf, sizeof(buf))) {
-      display.drawString(0, 1, buf);
-    }
-
-    unsigned long nowMillis = millis();
-
-    if (nowMillis - lastSoilUpdate >= 1000) {
-      lastSoilUpdate = nowMillis;
-      sensor1.update();
-      sensor2.update();
-    }
-    if (nowMillis - lastSoilDisplay >= 5000) {
-      lastSoilDisplay = nowMillis;
-
-      char buf[17];
-
-      dhtDisplay.update(true);
-      dhtDisplay.displayLast();
-
-      sensor1.calcAverage();
-      sensor2.calcAverage();
-
-      snprintf(buf, sizeof(buf), "1: %.2fV", sensor1.getVoltage());
-      display.drawString(0, 3, buf);
-
-      snprintf(buf, sizeof(buf), "2: %.2fV", sensor2.getVoltage());
-      display.drawString(0, 4, buf);
+        display.drawString(0, 1, buf);
     }
 
     dhtDisplay.update(true);
     dhtDisplay.displayLast();
 
+    sensor1.update(true);
+    sensor2.update(true);
+
+    sensor1.displayLast();
+    sensor2.displayLast();
+
     if (btn4) {
-      currentMode = MAIN_MENU;
-      cursorIndex = 0;
-      drawMainMenu();
+        currentMode = MAIN_MENU;
+        cursorIndex = 0;
+        drawMainMenu();
     }
   }
 
@@ -617,11 +649,15 @@ Button btn1(BUTTON1_PIN, BUTTON_PULSE);
 Button btn2(BUTTON2_PIN, BUTTON_PULSE);
 Button btn3(BUTTON3_PIN, BUTTON_PULSE);
 Button btn4(BUTTON4_PIN, BUTTON_PULSE);
+Button btn5(BUTTON5_PIN, BUTTON_PULSE);
 
 MenuSystem menu(u8x8, dhtDisplay, menuItems, menuSize);
+SoilSensor sensor1(PIN_SOILSENSOR_1, 3, u8x8);
+SoilSensor sensor2(PIN_SOILSENSOR_2, 4, u8x8);
 
 void clearLine(uint8_t row);
 
+bool pumpState = false;
 
 void setup() {
   Serial.begin(115200);
@@ -631,16 +667,25 @@ void setup() {
   u8x8.begin();
   u8x8.setFont(u8x8_font_chroma48medium8_r);
   u8x8.clear();
-  
+
+  sensor1.begin();
+  sensor2.begin();
+  Serial.println("SoilSensor ready");
+  delay(100);
+
   rtcManager.begin();
   Serial.println("RTC ready");
   delay(100);
   dhtDisplay.begin();
-  Serial.println("RTC ready");
+  Serial.println("DTH ready");
   delay(100);
   menu.begin();
   Serial.println("OLED Menu ready");
   delay(100);
+
+  pinMode(PUMP_PIN, OUTPUT);
+  digitalWrite(PUMP_PIN, LOW);
+  Serial.println("Pump ready");
 
   Serial.println("All Setup ready");
   delay(1000);
@@ -651,8 +696,16 @@ void loop() {
   bool b2 = btn2.update();
   bool b3 = btn3.update();
   bool b4 = btn4.update();
+  bool b5 = btn5.update();
 
   menu.update(b1, b2, b3, b4);
+
+  if (b5) {
+    pumpState = !pumpState;
+    digitalWrite(PUMP_PIN, pumpState ? HIGH : LOW);
+    Serial.print("Pump is now: ");
+    Serial.println(pumpState ? "ON" : "OFF");
+  }
 }
 
 

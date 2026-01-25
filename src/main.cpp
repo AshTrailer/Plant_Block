@@ -4,7 +4,8 @@
 #include <U8x8lib.h>
 #include <Ds1302.h>
 
-#define PUMP_PIN 26
+#define PUMP_PIN_1 26
+#define PUMP_PIN_2 25
 
 #define PIN_SDA 22
 #define PIN_SCL 23
@@ -30,9 +31,6 @@ const int BUTTON1_PIN = 17;
 const int BUTTON2_PIN = 16;
 const int BUTTON3_PIN = 4;
 const int BUTTON4_PIN = 15;
-
-const int BUTTON5_PIN = 12;
-
 const unsigned long BUTTON4_DEBOUNCE_MS = 50;
 const unsigned long BUTTON4_REPEAT_MS   = 200;
 
@@ -174,61 +172,68 @@ private:
 
     float lastVoltage;
     float lastMoisture;
+    bool valid;
 
     const float a = -1.176;
     const float b = 1.77;
     const float moistureError = 8.0f; // ±8%
 
 public:
-    SoilSensor(uint8_t p, uint8_t row, U8X8_SSD1306_128X64_NONAME_HW_I2C &disp)
-        : pin(p), displayRow(row), display(disp),
-          lastSampleTime(0), lastUpdateTime(0),
-          voltageSum(0), sampleCount(0),
-          lastVoltage(0), lastMoisture(0) {}
+  SoilSensor(uint8_t p, uint8_t row, U8X8_SSD1306_128X64_NONAME_HW_I2C &disp)
+      : pin(p), displayRow(row), display(disp),
+        lastSampleTime(0), lastUpdateTime(0),
+        voltageSum(0), sampleCount(0),
+        lastVoltage(0), lastMoisture(0),
+        valid(false)
+  {}
 
-    void begin() {
-        pinMode(pin, INPUT);
+  void begin() {
+    pinMode(pin, INPUT);
+  }
+
+  void update(bool showOnOLED) {
+    unsigned long now = millis();
+    if (now - lastSampleTime >= 1000) {
+      lastSampleTime = now;
+      int raw = analogRead(pin);
+      float v = raw * 3.0f / 4095.0f;
+      voltageSum += v;
+      sampleCount++;
     }
 
-    void update(bool showOnOLED) {
-        unsigned long now = millis();
-        if (now - lastSampleTime >= 1000) {
-            lastSampleTime = now;
-            int raw = analogRead(pin);
-            float v = raw * 3.0f / 4095.0f;
-            voltageSum += v;
-            sampleCount++;
-        }
+    if (now - lastUpdateTime >= 5000) {
+      lastUpdateTime = now;
+      if (sampleCount > 0) {
+        lastVoltage = voltageSum / sampleCount;
+        voltageSum = 0;
+        sampleCount = 0;
 
-        if (now - lastUpdateTime >= 5000) {
-            lastUpdateTime = now;
-            if (sampleCount > 0) {
-                lastVoltage = voltageSum / sampleCount;
-                voltageSum = 0;
-                sampleCount = 0;
+        float h = (lastVoltage - b) / a;
+        if (h < 0) h = 0;
+        if (h > 1) h = 1;
+        lastMoisture = h * 100.0f;
+        valid = true;
+      }
+      if (showOnOLED) displayLast();
+      }
+  }
 
-                float h = (lastVoltage - b) / a;
-                if (h < 0) h = 0;
-                if (h > 1) h = 1;
-                lastMoisture = h * 100.0f;
-            }
+  float getLatestMoisture() const {
+    return valid ? lastMoisture : NAN;
+  }
 
-            if (showOnOLED) displayLast();
-        }
-    }
+  void displayLast() {
+    char buf[20];
+    snprintf(buf, sizeof(buf),
+            "M%d: %.1f%% (%.0f%%)",
+            (displayRow - 2),
+            lastMoisture,
+            moistureError);
+    display.drawString(0, displayRow, buf);
+  }
 
-    void displayLast() {
-        char buf[20];
-        snprintf(buf, sizeof(buf),
-                 "M%d: %.1f%% (%.0f%%)",
-                 (displayRow - 2),
-                 lastMoisture,
-                 moistureError);
-        display.drawString(0, displayRow, buf);
-    }
-
-    float getVoltage() const { return lastVoltage; }
-    float getMoisture() const { return lastMoisture; }
+  float getMoisture() const { return lastMoisture; }
+  bool hasValid() const { return valid; }
 };
 
 class Button {
@@ -426,6 +431,101 @@ public:
 };
 DHT_Display dhtDisplay(DHTPIN, 2);
 
+class WaterController {
+private:
+  SoilSensor &sensor;
+  RTCManager &rtc;
+  uint8_t pumpPin;
+
+  float threshold;
+  int maxPerWeek;
+  int waterCountThisWeek;
+  unsigned long lastPumpMillis;
+  bool pumping;
+
+  uint8_t lastDOW;
+  int lastWaterHour;
+  int lastWaterDay;
+  int lastWaterMonth;
+
+  unsigned long startTime;
+  unsigned long warmUpDuration;
+
+  const unsigned long pumpDuration = 20000;
+  const unsigned long minInterval  = 4UL * 3600UL * 1000UL;
+
+public:
+  WaterController(SoilSensor &s, RTCManager &r, uint8_t pinPump,
+                  float th, int maxW,
+                  unsigned long warmUpSec = 10)
+      : sensor(s), rtc(r), pumpPin(pinPump),
+        threshold(th), maxPerWeek(maxW),
+        waterCountThisWeek(0), lastPumpMillis(0),
+        pumping(false), lastDOW(255),
+        lastWaterHour(-1), lastWaterDay(-1), lastWaterMonth(-1),
+        warmUpDuration(warmUpSec * 1000UL)
+  {}
+
+  void begin() {
+    pinMode(pumpPin, OUTPUT);
+    digitalWrite(pumpPin, LOW);
+    startTime = millis();
+  }
+
+  void update() {
+    if (millis() - startTime < warmUpDuration) return;
+
+    Ds1302::DateTime now;
+    rtc.getDateTime(now);
+
+    if (now.dow != lastDOW) {
+        lastDOW = now.dow;
+        if (now.dow == 1) waterCountThisWeek = 0;
+    }
+
+    if (pumping) {
+        if (millis() - lastPumpMillis >= pumpDuration) stopPump();
+        return;
+    }
+
+    float moisture = sensor.getLatestMoisture();
+    if (isnan(moisture)) return;
+
+    if (moisture > threshold) return;
+
+    if (lastWaterHour >= 0) {
+        unsigned long elapsed = millis() - lastPumpMillis;
+        if (elapsed < minInterval) return;
+    }
+
+    if (waterCountThisWeek >= maxPerWeek) return;
+
+    startPump();
+    waterCountThisWeek++;
+    lastWaterHour = now.hour;
+    lastWaterDay = now.day;
+    lastWaterMonth = now.month;
+
+}
+
+  int getWaterCountThisWeek() const { return waterCountThisWeek; }
+  int getMaxPerWeek() const { return maxPerWeek; }
+
+private:
+  void startPump() {
+    pumping = true;
+    lastPumpMillis = millis();
+    digitalWrite(pumpPin, HIGH);
+    Serial.println("Pump START");
+  }
+
+  void stopPump() {
+    pumping = false;
+    digitalWrite(pumpPin, LOW);
+    Serial.println("Pump STOP");
+  }
+};
+
 class MenuSystem {  
 public:
   enum Mode {
@@ -443,15 +543,19 @@ private:
   int menuSize;
   int cursorIndex;
   uint8_t lastSecond;
-  SoilSensor sensor1;
-  SoilSensor sensor2;
+  SoilSensor &sensor1;
+  SoilSensor &sensor2;
   unsigned long lastSoilUpdate = 0;
   unsigned long lastSoilDisplay = 0;
+  WaterController &wc1;
+  WaterController &wc2;
 
 public:
   MenuSystem(U8X8_SSD1306_128X64_NONAME_HW_I2C &u8x8,
-           DHT_Display &dht,
-           const char* items[], int size)
+          DHT_Display &dht,
+          const char* items[], int size,
+          SoilSensor &s1, SoilSensor &s2,
+          WaterController &w1, WaterController &w2)
     : display(u8x8),
       dhtDisplay(dht),
       currentMode(DATA_MODE),
@@ -459,11 +563,11 @@ public:
       menuSize(size),
       cursorIndex(0),
       lastSecond(255),
-      sensor1(PIN_SOILSENSOR_1, 3, u8x8),
-      sensor2(PIN_SOILSENSOR_2, 4, u8x8)
+      sensor1(s1), 
+      sensor2(s2),
+      wc1(w1),
+      wc2(w2)
   {}
-
-
   void begin() {
     sensor1.begin();
     sensor2.begin();
@@ -491,6 +595,7 @@ public:
   }
 
 private:
+
   Ds1302::DateTime timeSnapshot;
   void drawMainMenu() {
     display.clear();
@@ -560,6 +665,18 @@ private:
 
     sensor1.displayLast();
     sensor2.displayLast();
+
+    char waterInfo1[20];
+    char waterInfo2[20];
+
+    snprintf(waterInfo1, sizeof(waterInfo1), "M1: %d (%d 20s)", 
+           wc1.getWaterCountThisWeek(), wc1.getMaxPerWeek());
+  
+    snprintf(waterInfo2, sizeof(waterInfo2), "M2: %d (%d 20s)", 
+            wc2.getWaterCountThisWeek(), wc2.getMaxPerWeek());
+    
+    display.drawString(0, 5, waterInfo1);
+    display.drawString(0, 6, waterInfo2);
 
     if (btn4) {
         currentMode = MAIN_MENU;
@@ -649,11 +766,14 @@ Button btn1(BUTTON1_PIN, BUTTON_PULSE);
 Button btn2(BUTTON2_PIN, BUTTON_PULSE);
 Button btn3(BUTTON3_PIN, BUTTON_PULSE);
 Button btn4(BUTTON4_PIN, BUTTON_PULSE);
-Button btn5(BUTTON5_PIN, BUTTON_PULSE);
 
-MenuSystem menu(u8x8, dhtDisplay, menuItems, menuSize);
 SoilSensor sensor1(PIN_SOILSENSOR_1, 3, u8x8);
 SoilSensor sensor2(PIN_SOILSENSOR_2, 4, u8x8);
+
+WaterController wc1(sensor1, rtcManager, PUMP_PIN_1, 20.0, 5, 10);
+WaterController wc2(sensor2, rtcManager, PUMP_PIN_2, 30.0, 5, 10);
+
+MenuSystem menu(u8x8, dhtDisplay, menuItems, menuSize, sensor1, sensor2, wc1, wc2);
 
 void clearLine(uint8_t row);
 
@@ -676,17 +796,19 @@ void setup() {
   rtcManager.begin();
   Serial.println("RTC ready");
   delay(100);
+
   dhtDisplay.begin();
   Serial.println("DTH ready");
   delay(100);
+
   menu.begin();
   Serial.println("OLED Menu ready");
   delay(100);
 
-  pinMode(PUMP_PIN, OUTPUT);
-  digitalWrite(PUMP_PIN, LOW);
-  Serial.println("Pump ready");
-
+  wc1.begin();
+  wc2.begin();
+  Serial.println("WaterController ready");
+  
   Serial.println("All Setup ready");
   delay(1000);
 }
@@ -696,16 +818,14 @@ void loop() {
   bool b2 = btn2.update();
   bool b3 = btn3.update();
   bool b4 = btn4.update();
-  bool b5 = btn5.update();
 
   menu.update(b1, b2, b3, b4);
 
-  if (b5) {
-    pumpState = !pumpState;
-    digitalWrite(PUMP_PIN, pumpState ? HIGH : LOW);
-    Serial.print("Pump is now: ");
-    Serial.println(pumpState ? "ON" : "OFF");
-  }
+  sensor1.update(false);
+  sensor2.update(false);
+
+  wc1.update();
+  wc2.update();
 }
 
 

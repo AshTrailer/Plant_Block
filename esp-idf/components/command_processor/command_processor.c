@@ -1,6 +1,6 @@
 #include "command_processor.h"
 #include "esp_log.h"
-#include "freertos/FreeRTOS.h" 
+#include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <string.h>
 #include <ctype.h>
@@ -9,18 +9,18 @@
 static const char *TAG = "CMD_PROCESSOR";
 
 #define MAX_MODULES 10
-#define CONFIRM_TIMEOUT_TICKS (10000 / portTICK_PERIOD_MS) // 10秒超时
+#define CONFIRM_TIMEOUT_TICKS (10000 / portTICK_PERIOD_MS)
 
 typedef struct {
     char name[16];
     int status;
+    int pin; // 新增：存储模块控制的引脚号，-1表示未设置
 } module_status_t;
 
 static module_status_t s_module_status[MAX_MODULES];
 static int s_module_count = 0;
 static bool s_confirmation_enabled = false;
 
-// --- 新模块确认流程状态机变量 ---
 static struct {
     bool is_waiting;
     char pending_name[16];
@@ -28,7 +28,7 @@ static struct {
     TickType_t wait_start_ticks;
 } s_confirm_state = {0};
 
-// 查找模块索引，不存在返回-1
+// 查找模块索引
 static int find_module_index(const char* name) {
     for (int i = 0; i < s_module_count; i++) {
         if (strcmp(s_module_status[i].name, name) == 0) {
@@ -38,141 +38,183 @@ static int find_module_index(const char* name) {
     return -1;
 }
 
-// 初始化函数：预置模块并配置确认功能
+// 打印命令帮助
+static void print_command_help(void) {
+    ESP_LOGI(TAG, "=== Command Help ===");
+    ESP_LOGI(TAG, "<module> 1/0        : Set module status (1=ON, 0=OFF)");
+    ESP_LOGI(TAG, "<module> delete     : Delete the module from preset list");
+    ESP_LOGI(TAG, "<module> pin <num>  : Set module control pin number(<=36)");
+    ESP_LOGI(TAG, "<module> status     : Show module current status and pin");
+    ESP_LOGI(TAG, "help                : Show this help message");
+    ESP_LOGI(TAG, "=================");
+}
+
+// 初始化函数
 void command_processor_init(bool enable_confirmation) {
     s_module_count = 0;
     s_confirmation_enabled = enable_confirmation;
     memset(&s_confirm_state, 0, sizeof(s_confirm_state));
 
-    // --- 预置您的模块列表 ---
-    // 示例：预置 "fan" 和 "pump" 模块，状态初始化为0 (关闭)
+    // 预置模块，引脚初始化为-1（未设置）
     strncpy(s_module_status[s_module_count].name, "fan", sizeof(s_module_status[0].name) - 1);
     s_module_status[s_module_count].status = 0;
+    s_module_status[s_module_count].pin = -1;
     s_module_count++;
 
     strncpy(s_module_status[s_module_count].name, "pump", sizeof(s_module_status[0].name) - 1);
     s_module_status[s_module_count].status = 0;
+    s_module_status[s_module_count].pin = -1;
     s_module_count++;
 
-    // 您可以继续添加其他预置模块...
-    // strncpy(s_module_status[s_module_count].name, "light", ...);
-    // s_module_count++;
-
-    ESP_LOGI(TAG, "Command processor ready. Pre-loaded %d module(s).", s_module_count);
+    ESP_LOGI(TAG, "Command processor ready. Pre-loaded %d module(s):", s_module_count);
+    for (int i = 0; i < s_module_count; i++) { // 遍历打印
+        ESP_LOGI(TAG, "  [%d] %s (status=%d, pin=%d)",
+                 i, s_module_status[i].name, s_module_status[i].status, s_module_status[i].pin);
+    }
+    print_command_help(); // 初始化后显示帮助
 }
 
-// 处理新模块确认流程的状态机轮询
 void command_processor_poll_confirmation(void) {
-    if (!s_confirm_state.is_waiting) {
-        return;
-    }
-
-    // 检查超时 (30秒)
+    if (!s_confirm_state.is_waiting) return;
     if ((xTaskGetTickCount() - s_confirm_state.wait_start_ticks) > CONFIRM_TIMEOUT_TICKS) {
         ESP_LOGI(TAG, "Confirmation timeout for new module '%s'. Ignored.", s_confirm_state.pending_name);
         memset(&s_confirm_state, 0, sizeof(s_confirm_state));
-        return;
     }
-
-    // 注意：此处不主动读取输入，仅作为状态机维护。
-    // 实际的“YES/NO”响应应由主程序通过 `command_processor_process_frame` 传入。
 }
 
-// 检查是否正在等待确认
 bool command_processor_is_waiting_for_confirm(void) {
     return s_confirm_state.is_waiting;
 }
 
-// 处理输入帧的核心函数 (增强版)
+// 处理输入帧的核心函数
 void command_processor_process_frame(const char* frame) {
-    if (frame == NULL) {
-        return;
-    }
+    if (frame == NULL) return;
 
     ESP_LOGI(TAG, "Processing frame: %s", frame);
 
-    // --- 情况1: 处理处于等待确认状态的响应 ("YES"/"NO") ---
+    // --- 情况1: 处理确认响应 ---
     if (s_confirm_state.is_waiting) {
-        // 转换为大写以便比较
         char upper_frame[16];
         strncpy(upper_frame, frame, sizeof(upper_frame) - 1);
         upper_frame[sizeof(upper_frame)-1] = '\0';
-        for (int i = 0; upper_frame[i]; i++) {
-            upper_frame[i] = toupper(upper_frame[i]);
-        }
+        for (int i = 0; upper_frame[i]; i++) upper_frame[i] = toupper(upper_frame[i]);
 
         if (strcmp(upper_frame, "YES") == 0) {
-            // 确认添加
             if (s_module_count >= MAX_MODULES) {
                 ESP_LOGI(TAG, "Error: Module storage full. Cannot add '%s'.", s_confirm_state.pending_name);
             } else {
                 strncpy(s_module_status[s_module_count].name, s_confirm_state.pending_name,
                         sizeof(s_module_status[0].name) - 1);
                 s_module_status[s_module_count].status = s_confirm_state.pending_status;
+                s_module_status[s_module_count].pin = -1; // 新增模块引脚默认为-1
                 s_module_count++;
-                ESP_LOGI(TAG, "New module '%s' added with status %d.",
-                         s_confirm_state.pending_name, s_confirm_state.pending_status);
+                ESP_LOGI(TAG, "New module '%s' added with status %d.", s_confirm_state.pending_name, s_confirm_state.pending_status);
             }
         } else if (strcmp(upper_frame, "NO") == 0) {
-            // 拒绝添加
             ESP_LOGI(TAG, "Addition of new module '%s' cancelled.", s_confirm_state.pending_name);
         } else {
             ESP_LOGI(TAG, "Invalid confirmation response. Please enter 'YES' or 'NO'.");
-            return; // 输入无效，保持等待状态
+            return;
         }
-        // 无论结果如何，结束确认等待状态
         memset(&s_confirm_state, 0, sizeof(s_confirm_state));
         return;
     }
 
-    // --- 情况2: 正常解析命令帧 "module status" ---
+    // --- 情况2: 处理 help 命令 ---
+    if (strcmp(frame, "help") == 0) {
+        print_command_help();
+        return;
+    }
+
+    // --- 情况3: 解析通用命令格式 "<module> <action> [arg]" ---
     char module_name[16];
-    char status_str[4];
-    int status_val;
+    char action[16];
+    char arg[16];
+    int num_matched = sscanf(frame, "%15s %15s %15s", module_name, action, arg);
 
-    if (sscanf(frame, "%15s %3s", module_name, status_str) != 2) {
-        ESP_LOGI(TAG, "Error: Invalid format. Expected 'MODULE_NAME 1/0'.");
+    if (num_matched < 2) {
+        ESP_LOGI(TAG, "Error: Invalid command format. Type 'help' for usage.");
         return;
     }
-
-    if (strlen(status_str) != 1 || (status_str[0] != '0' && status_str[0] != '1')) {
-        ESP_LOGI(TAG, "Error: Status must be 0 or 1.");
-        return;
-    }
-    status_val = status_str[0] - '0';
 
     int index = find_module_index(module_name);
-    if (index != -1) {
-        // 模块已存在，直接更新状态
+    if (index == -1) {
+        // 模块不存在，尝试按旧格式 "module status" 解析，触发确认流程
+        char status_str[4];
+        if (sscanf(frame, "%15s %3s", module_name, status_str) == 2 &&
+            strlen(status_str) == 1 && (status_str[0] == '0' || status_str[0] == '1')) {
+            int status_val = status_str[0] - '0';
+            if (!s_confirmation_enabled) {
+                ESP_LOGI(TAG, "Error: Module '%s' not found. (Auto-add disabled)", module_name);
+                return;
+            }
+            strncpy(s_confirm_state.pending_name, module_name, sizeof(s_confirm_state.pending_name) - 1);
+            s_confirm_state.pending_status = status_val;
+            s_confirm_state.is_waiting = true;
+            s_confirm_state.wait_start_ticks = xTaskGetTickCount();
+            ESP_LOGI(TAG, "New module '%s' detected. Enter 'YES' to add (status=%d), or 'NO' to ignore.", module_name, status_val);
+        } else {
+            ESP_LOGI(TAG, "Error: Module '%s' not found.", module_name);
+        }
+        return;
+    }
+
+    // 模块存在，处理 action
+    // 3.1 处理 delete 命令
+    if (strcmp(action, "delete") == 0) {
+        ESP_LOGI(TAG, "Deleting module '%s'...", module_name);
+        // 将数组后续元素前移，覆盖要删除的模块
+        for (int i = index; i < s_module_count - 1; i++) {
+            s_module_status[i] = s_module_status[i + 1];
+        }
+        s_module_count--;
+        ESP_LOGI(TAG, "Module '%s' deleted. Total modules: %d", module_name, s_module_count);
+        return;
+    }
+
+    // 3.2 处理 pin 命令
+    if (strcmp(action, "pin") == 0) {
+        if (num_matched < 3) {
+            ESP_LOGI(TAG, "Error: Pin number required. Usage: <module> pin <num>");
+            return;
+        }
+        int pin_num = atoi(arg);
+        if (pin_num < 0 || pin_num > 36) {
+            ESP_LOGI(TAG, "Error: Pin number must be between 0 and 36.");
+            return;
+        }
+        s_module_status[index].pin = pin_num;
+        ESP_LOGI(TAG, "Module '%s' pin set to: %d", module_name, pin_num);
+        return;
+    }
+
+    // 3.3 处理 status 命令
+    if (strcmp(action, "status") == 0) {
+        ESP_LOGI(TAG, "Module '%s' status: %d, pin: %d",
+                 module_name, s_module_status[index].status, s_module_status[index].pin);
+        return;
+    }
+
+    // 3.4 处理设置状态命令 (旧格式兼容：<module> <1/0>)
+    if (strcmp(action, "1") == 0 || strcmp(action, "0") == 0) {
+        int status_val = action[0] - '0';
         s_module_status[index].status = status_val;
         ESP_LOGI(TAG, "Module '%s' status updated to: %d", module_name, status_val);
         return;
     }
 
-    // --- 模块不存在，进入确认流程 ---
-    if (!s_confirmation_enabled) {
-        // 未启用确认功能，直接拒绝
-        ESP_LOGI(TAG, "Error: Module '%s' not found. (Auto-add disabled)", module_name);
-        return;
-    }
-
-    // 启用确认功能，记录待添加模块并进入等待状态
-    strncpy(s_confirm_state.pending_name, module_name, sizeof(s_confirm_state.pending_name) - 1);
-    s_confirm_state.pending_status = status_val;
-    s_confirm_state.is_waiting = true;
-    s_confirm_state.wait_start_ticks = xTaskGetTickCount();
-
-    ESP_LOGI(TAG, "New module '%s' detected. Enter 'YES' to add (status=%d), or 'NO' to ignore.",
-             module_name, status_val);
+    // 未知的 action
+    ESP_LOGI(TAG, "Error: Unknown action '%s' for module '%s'. Type 'help' for usage.", action, module_name);
 }
 
-// 供其他模块查询自身状态的函数 (保持不变)
+// 查询模块状态
 int command_processor_get_status(const char* module_name) {
     int index = find_module_index(module_name);
-    if (index != -1) {
-        return s_module_status[index].status;
-    }
-    ESP_LOGW(TAG, "Module '%s' not found.", module_name);
-    return -1;
+    return (index != -1) ? s_module_status[index].status : -1;
 }
 
+// 查询模块引脚
+int command_processor_get_pin(const char* module_name) {
+    int index = find_module_index(module_name);
+    return (index != -1) ? s_module_status[index].pin : -1;
+}

@@ -15,6 +15,11 @@ void command_processor_process_frame(const char* frame);
 // 返回值: 该模块的当前状态 (1/0), 若模块不存在则返回 -1
 int command_processor_get_status(const char* module_name);
 
+// 供其他模块查询自身引脚配置的函数
+// 参数: module_name - 要查询的模块名
+// 返回值: 该模块的当前引脚号，若未设置或模块不存在则返回 -1
+int command_processor_get_pin(const char* module_name);
+
 // 内部确认流程状态机轮询函数 (需在主循环调用)
 void command_processor_poll_confirmation(void);
 

@@ -3,4 +3,6 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES 
         startup_logger
+        input_parser
+        command_processor
 )

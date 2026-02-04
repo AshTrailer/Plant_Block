@@ -11,32 +11,33 @@ void app_main(void) {
     
     startup_logger_print();
     input_parser_init(false, INPUT_MODE_NON_BLOCKING);
-    command_processor_init();
-    
-    const char* frame = input_parser_wait_and_parse();
-    
-    while (1)
-    {
-       input_parser_poll(); // 此函数调用极快，不会阻塞
+    command_processor_init(true);
         
-        // 检查是否有新帧到达
+    while (1) {
+        // 1. 轮询输入
+        input_parser_poll();
+
+        // 2. 轮询命令处理器的确认状态机
+        command_processor_poll_confirmation();
+
+        // 3. 检查并处理新帧
         if (input_parser_frame_ready()) {
             const char* frame = input_parser_get_frame();
             if (frame != NULL) {
                 ESP_LOGI("MAIN", "New frame: %s", frame);
+
+                // 如果当前正在等待确认，则将帧直接交给确认流程处理
+                // 否则，按正常命令处理
                 command_processor_process_frame(frame);
-                
-                // 示例查询
-                int fan_status = command_processor_get_status("fan");
-                ESP_LOGI("MAIN", "Fan status: %d", fan_status);
             }
         }
-        
-        // --- 此处可安全添加其他任务代码 ---
-        // 例如：传感器读取、状态机更新、LED闪烁等
-        // 这些代码将能与输入处理并发运行
-        
-        // 控制主循环频率，防止看门狗，也减少CPU占用
+
+        // 4. 示例：查询预置模块状态
+        int fan_status = command_processor_get_status("fan");
+        int pump_status = command_processor_get_status("pump");
+        // 可以根据状态执行实际控制...
+
+        // 5. 主循环延时
         vTaskDelay(50 / portTICK_PERIOD_MS);
     }
           

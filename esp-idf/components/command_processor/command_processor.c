@@ -1,11 +1,10 @@
 #include "command_processor.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h" 
+#include "freertos/task.h"
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
-
-
-static const char *TAG = "CMD_PROCESSOR";
 
 static const char *TAG = "CMD_PROCESSOR";
 

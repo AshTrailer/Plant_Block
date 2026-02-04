@@ -45,6 +45,7 @@ static void print_command_help(void) {
     ESP_LOGI(TAG, "<module> delete     : Delete the module from preset list");
     ESP_LOGI(TAG, "<module> pin <num>  : Set module control pin number(<=36)");
     ESP_LOGI(TAG, "<module> status     : Show module current status and pin");
+    ESP_LOGI(TAG, "list                : List all preset modules");
     ESP_LOGI(TAG, "help                : Show this help message");
     ESP_LOGI(TAG, "=================");
 }
@@ -92,7 +93,7 @@ void command_processor_process_frame(const char* frame) {
 
     ESP_LOGI(TAG, "Processing frame: %s", frame);
 
-    // --- 情况1: 处理确认响应 ---
+    // --- 处理确认响应 ---
     if (s_confirm_state.is_waiting) {
         char upper_frame[16];
         strncpy(upper_frame, frame, sizeof(upper_frame) - 1);
@@ -120,13 +121,32 @@ void command_processor_process_frame(const char* frame) {
         return;
     }
 
-    // --- 情况2: 处理 help 命令 ---
+    // --- 处理 help 命令 ---
     if (strcmp(frame, "help") == 0) {
         print_command_help();
         return;
     }
 
-    // --- 情况3: 解析通用命令格式 "<module> <action> [arg]" ---
+    // --- 处理 list 命令 ---
+    if (strcmp(frame, "list") == 0) {
+        if (s_module_count == 0) {
+            ESP_LOGI(TAG, "No modules loaded.");
+        } else {
+            ESP_LOGI(TAG, "=== Module List (Total: %d) ===", s_module_count);
+            ESP_LOGI(TAG, "Module     Status  Pin");
+            ESP_LOGI(TAG, "-------    ------  ----");
+            for (int i = 0; i < s_module_count; i++) {
+                ESP_LOGI(TAG, "%-10s %-7d %d",
+                         s_module_status[i].name,
+                         s_module_status[i].status,
+                         s_module_status[i].pin);
+            }
+            ESP_LOGI(TAG, "=============================");
+        }
+        return;
+    }
+
+    // ---解析通用命令格式 "<module> <action> [arg]" ---
     char module_name[16];
     char action[16];
     char arg[16];

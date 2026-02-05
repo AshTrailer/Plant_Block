@@ -7,8 +7,8 @@
 static const char *TAG = "VENT_CTRL";
 
 // 默认通风周期（55分钟通风5分钟）-> 用于测试：20秒通风10秒
- #define DEFAULT_VENT_ON_SECONDS  300   // 通风5分钟
- #define DEFAULT_VENT_OFF_SECONDS 3300  // 关闭55分钟
+ #define DEFAULT_VENT_ON_SECONDS  300   // 通风5分钟 300 
+ #define DEFAULT_VENT_OFF_SECONDS 3300  // 关闭55分钟 3300
 // 测试参数：
 // #define DEFAULT_VENT_ON_SECONDS  10   // 通风10秒
 // #define DEFAULT_VENT_OFF_SECONDS 20   // 关闭20秒
@@ -19,6 +19,7 @@ static int s_vent_on_seconds = DEFAULT_VENT_ON_SECONDS;
 static int s_vent_off_seconds = DEFAULT_VENT_OFF_SECONDS;
 static TaskHandle_t s_ventilation_task_handle = NULL;
 static bool s_task_running = false;
+static bool s_current_state = false;
 
 // 通风控制任务函数
 static void ventilation_task(void *arg) {
@@ -43,6 +44,16 @@ static void ventilation_task(void *arg) {
 void ventilation_control_init(int gpio_pin) {
     s_gpio_pin = gpio_pin;
     ESP_LOGI(TAG, "Ventilation control module initialized, control pin: GPIO%d", s_gpio_pin);
+}
+
+// 获取通风控制当前状态
+bool ventilation_control_get_state(void) {
+    return s_current_state;
+}
+
+// 获取通风控制引脚号
+int ventilation_control_get_pin(void) {
+    return s_gpio_pin;
 }
 
 // 启动通风控制任务

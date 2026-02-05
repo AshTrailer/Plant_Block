@@ -271,3 +271,8 @@ int light_control_get_end_minute(void) {
 float light_control_get_duration(void) {
     return s_schedule.duration_hours;
 }
+
+// 获取补光灯控制引脚号
+int light_control_get_pin(void) {
+    return s_schedule.control_pin;
+}

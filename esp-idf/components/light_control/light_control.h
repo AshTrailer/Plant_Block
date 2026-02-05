@@ -59,4 +59,7 @@ int light_control_get_end_minute(void);
 // 获取照明时长
 float light_control_get_duration(void);
 
+// 获取补光灯控制引脚号
+int light_control_get_pin(void);
+
 #endif

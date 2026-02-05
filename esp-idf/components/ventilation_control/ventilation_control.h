@@ -18,4 +18,10 @@ void ventilation_control_stop(void);
 //       vent_off_seconds - 通风关闭的秒数
 void ventilation_control_set_timing(int vent_on_seconds, int vent_off_seconds);
 
+// 获取通风控制当前状态
+bool ventilation_control_get_state(void);
+
+// 获取通风控制引脚号
+int ventilation_control_get_pin(void);
+
 #endif

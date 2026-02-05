@@ -1,7 +1,6 @@
 idf_component_register(
-    SRCS "gpio_control.c"
+    SRCS "pwm_test.c"
     INCLUDE_DIRS "."
     REQUIRES 
         driver
-        ventilation_control
 )

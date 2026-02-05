@@ -270,7 +270,7 @@ void time_manager_process_command(const char* command) {
         // 查询当前时间
         system_time_t current_time = time_manager_get_time();
         ESP_LOGI(TAG, "Current Time: %s", time_manager_get_time_string());
-        //ESP_LOGI(TAG, "详细: 年=%d 月=%d 日=%d 时=%d 分=%d 秒=%d",
+        //ESP_LOGI(TAG, "详细: %d年  %d月 %d日 %d时 %d分 %d秒",
         //        current_time.year, current_time.month, current_time.day,
         //        current_time.hour, current_time.minute, current_time.second);
     } else if (strcmp(command, "time help") == 0) {

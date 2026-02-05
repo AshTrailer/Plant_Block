@@ -7,4 +7,5 @@ idf_component_register(
         gpio_control
         ventilation_control
         time_manager
+        light_control
 )

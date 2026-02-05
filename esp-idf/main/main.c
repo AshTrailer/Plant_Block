@@ -21,10 +21,9 @@ void app_main(void) {
     command_processor_init(true);
 
 
-    // 初始化通风控制模块，使用GPIO15
+    // 初始化通风控制模块，使用GPIO1
     ESP_LOGI("MAIN", "Initializing Ventilation Control...");
-    ventilation_control_init(15);
-    ventilation_control_set_timing(10, 20);
+    ventilation_control_init(1);
     ventilation_control_start();
 
     ESP_LOGI("MAIN", "All components initialized.");

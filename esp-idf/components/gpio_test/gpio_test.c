@@ -56,3 +56,92 @@ void gpio_test_deinit(void) {
     
     ESP_LOGI(TAG, "GPIO测试模块反初始化完成");
 }
+
+
+void gpio_control_process_frame(const char* frame) {
+    if (frame == NULL) {
+        return;
+    }
+
+    // 检查是否为GPIO命令
+    if (strncmp(frame, "gpio", 4) != 0) {
+        // 不是GPIO命令，忽略
+        return;
+    }
+
+    char cmd[32];
+    strncpy(cmd, frame, sizeof(cmd) - 1);
+    cmd[sizeof(cmd) - 1] = '\0';
+
+    ESP_LOGI(TAG, "解析命令: %s", cmd);
+
+    // 解析命令格式: gpio <pin> <level>
+    char* token = strtok(cmd, " ");
+    if (token == NULL || strcmp(token, "gpio") != 0) {
+        ESP_LOGI(TAG, "错误: 命令必须以 'gpio' 开头");
+        return;
+    }
+
+    // 获取引脚号
+    token = strtok(NULL, " ");
+    if (token == NULL) {
+        ESP_LOGI(TAG, "错误: 缺少引脚号");
+        ESP_LOGI(TAG, "用法: gpio <pin> <1/0>");
+        return;
+    }
+
+    int pin_num = atoi(token);
+    
+    // 验证引脚号范围 (ESP32-C6常用GPIO范围)
+    if (pin_num < 0 || pin_num > 30) {
+        ESP_LOGI(TAG, "错误: 引脚号 %d 超出范围 (0-30)", pin_num);
+        return;
+    }
+
+    // 获取电平值
+    token = strtok(NULL, " ");
+    if (token == NULL) {
+        ESP_LOGI(TAG, "错误: 缺少电平值");
+        ESP_LOGI(TAG, "用法: gpio <pin> <1/0>");
+        return;
+    }
+
+    int level;
+    if (strcmp(token, "1") == 0) {
+        level = 1;
+    } else if (strcmp(token, "0") == 0) {
+        level = 0;
+    } else {
+        ESP_LOGI(TAG, "错误: 电平值必须是 1 或 0，收到: %s", token);
+        return;
+    }
+
+    // 执行GPIO控制
+    gpio_num_t gpio_pin = pin_num;
+
+    // 重置引脚以确保其为GPIO功能
+    gpio_reset_pin(gpio_pin);
+
+    // 配置为输出
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << gpio_pin),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+
+    esp_err_t ret = gpio_config(&io_conf);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "GPIO%d 配置失败: %s", pin_num, esp_err_to_name(ret));
+        return;
+    }
+
+    // 设置电平
+    gpio_set_level(gpio_pin, level);
+    
+    ESP_LOGI(TAG, "成功: GPIO%d 设置为 %s (%.1fV)", 
+             pin_num, 
+             level ? "高电平" : "低电平",
+             level ? 3.3 : 0.0);
+}

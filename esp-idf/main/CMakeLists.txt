@@ -5,5 +5,5 @@ idf_component_register(
         startup_logger
         input_parser
         command_processor
-        gpio_test
+        gpio_control
 )

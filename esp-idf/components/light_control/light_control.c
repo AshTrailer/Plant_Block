@@ -182,104 +182,6 @@ bool light_control_set_duration(float hours) {
     return true;
 }
 
-// 处理补光灯相关命令
-void light_control_process_command(const char* command) {
-    if (command == NULL) return;
-    
-    ESP_LOGI(TAG, "处理补光灯命令: %s", command);
-    
-    if (strncmp(command, "light set start ", 16) == 0) {
-        // 格式: light set start HH:MM
-        int hour, minute;
-        if (sscanf(command + 16, "%d:%d", &hour, &minute) == 2) {
-            if (light_control_set_start_time(hour, minute)) {
-                ESP_LOGI(TAG, "开启时间设置成功");
-            }
-        } else {
-            ESP_LOGI(TAG, "格式错误，正确格式: light set start HH:MM");
-            ESP_LOGI(TAG, "示例: light set start 08:30");
-        }
-    }
-    else if (strncmp(command, "light set end ", 14) == 0) {
-        // 格式: light set end HH:MM
-        int hour, minute;
-        if (sscanf(command + 14, "%d:%d", &hour, &minute) == 2) {
-            if (light_control_set_end_time(hour, minute)) {
-                ESP_LOGI(TAG, "关闭时间设置成功");
-            }
-        } else {
-            ESP_LOGI(TAG, "格式错误，正确格式: light set end HH:MM");
-            ESP_LOGI(TAG, "示例: light set end 18:30");
-        }
-    }
-    else if (strncmp(command, "light set duration ", 19) == 0) {
-        // 格式: light set duration X.X
-        float hours;
-        if (sscanf(command + 19, "%f", &hours) == 1) {
-            if (light_control_set_duration(hours)) {
-                ESP_LOGI(TAG, "照明时长设置成功");
-            }
-        } else {
-            ESP_LOGI(TAG, "格式错误，正确格式: light set duration X.X");
-            ESP_LOGI(TAG, "示例: light set duration 3.5");
-        }
-    }
-    else if (strcmp(command, "light on") == 0) {
-        // 手动开启
-        s_schedule.is_manual_mode = true;
-        s_schedule.manual_state = true;
-        gpio_control_set_level(s_schedule.control_pin, true);
-        s_current_state = LIGHT_STATE_ON;
-        ESP_LOGI(TAG, "补光灯手动开启");
-    }
-    else if (strcmp(command, "light off") == 0) {
-        // 手动关闭
-        s_schedule.is_manual_mode = true;
-        s_schedule.manual_state = false;
-        gpio_control_set_level(s_schedule.control_pin, false);
-        s_current_state = LIGHT_STATE_OFF;
-        ESP_LOGI(TAG, "补光灯手动关闭");
-    }
-    else if (strcmp(command, "light auto") == 0) {
-        // 切回自动模式
-        s_schedule.is_manual_mode = false;
-        ESP_LOGI(TAG, "补光灯切换为自动模式");
-    }
-    else if (strcmp(command, "light status") == 0) {
-        // 显示状态
-        float elapsed = get_elapsed_minutes_today() / 60.0f;
-        ESP_LOGI(TAG, "=== 补光灯状态 ===");
-        ESP_LOGI(TAG, "模式: %s", s_schedule.is_manual_mode ? "手动" : "自动");
-        ESP_LOGI(TAG, "当前状态: %s", light_control_is_on() ? "开启" : "关闭");
-        ESP_LOGI(TAG, "计划: %02d:%02d - %02d:%02d",
-                 s_schedule.start_hour, s_schedule.start_minute,
-                 s_schedule.end_hour, s_schedule.end_minute);
-        ESP_LOGI(TAG, "照明时长: %.1f小时 (已照明: %.1f小时)",
-                 s_schedule.duration_hours, elapsed);
-        ESP_LOGI(TAG, "控制引脚: GPIO%d", s_schedule.control_pin);
-        ESP_LOGI(TAG, "================");
-    }
-    else if (strcmp(command, "light help") == 0) {
-        // 显示帮助
-        ESP_LOGI(TAG, "=== 补光灯命令帮助 ===");
-        ESP_LOGI(TAG, "light set start HH:MM  - 设置开启时间");
-        ESP_LOGI(TAG, "light set end HH:MM    - 设置关闭时间");
-        ESP_LOGI(TAG, "light set duration X.X - 设置照明时长(小时)");
-        ESP_LOGI(TAG, "light on               - 手动开启");
-        ESP_LOGI(TAG, "light off              - 手动关闭");
-        ESP_LOGI(TAG, "light auto             - 切换为自动模式");
-        ESP_LOGI(TAG, "light status           - 显示状态");
-        ESP_LOGI(TAG, "light help             - 显示此帮助");
-        ESP_LOGI(TAG, "示例:");
-        ESP_LOGI(TAG, "  light set start 08:30");
-        ESP_LOGI(TAG, "  light set duration 3.5");
-        ESP_LOGI(TAG, "=====================");
-    }
-    else {
-        ESP_LOGI(TAG, "未知命令，输入 'light help' 查看帮助");
-    }
-}
-
 // 更新补光灯状态
 void light_control_update(void) {
     if (s_schedule.is_manual_mode) {
@@ -333,4 +235,39 @@ void light_control_poll(void) {
         light_control_update();  // 调用现有的更新函数
         s_last_update_ticks = current_ticks;
     }
+}
+
+// 获取当前是否为手动模式
+bool light_control_is_manual_mode(void) {
+    return s_schedule.is_manual_mode;
+}
+
+// 设置自动模式
+void light_control_set_auto_mode(void) {
+    s_schedule.is_manual_mode = false;
+    ESP_LOGI(TAG, "补光灯切换为自动模式");
+}
+
+int light_control_get_start_hour(void) {
+    return s_schedule.start_hour;
+}
+
+// 获取开启时间 - 分钟
+int light_control_get_start_minute(void) {
+    return s_schedule.start_minute;
+}
+
+// 获取关闭时间 - 小时
+int light_control_get_end_hour(void) {
+    return s_schedule.end_hour;
+}
+
+// 获取关闭时间 - 分钟
+int light_control_get_end_minute(void) {
+    return s_schedule.end_minute;
+}
+
+// 获取照明时长
+float light_control_get_duration(void) {
+    return s_schedule.duration_hours;
 }

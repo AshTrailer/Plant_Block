@@ -26,9 +26,6 @@ bool light_control_set_end_time(int hour, int minute);
 // 设置补光灯的总照明时长（小时，支持小数，如3.4）
 bool light_control_set_duration(float hours);
 
-// 处理补光灯相关命令（调试用）
-void light_control_process_command(const char* command);
-
 // 更新补光灯状态（需在主循环中定期调用）
 void light_control_update(void);
 
@@ -40,5 +37,26 @@ bool light_control_is_on(void);
 
 // 直接控制补光灯开关（手动模式）
 void light_control_manual_set(bool on);
+
+// 获取当前是否为手动模式
+bool light_control_is_manual_mode(void);
+
+// 设置自动模式
+void light_control_set_auto_mode(void);
+
+// 获取开启时间 - 小时
+int light_control_get_start_hour(void);
+
+// 获取开启时间 - 分钟
+int light_control_get_start_minute(void);
+
+// 获取关闭时间 - 小时
+int light_control_get_end_hour(void);
+
+// 获取关闭时间 - 分钟
+int light_control_get_end_minute(void);
+
+// 获取照明时长
+float light_control_get_duration(void);
 
 #endif

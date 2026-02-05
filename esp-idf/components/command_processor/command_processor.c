@@ -2,6 +2,8 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "light_control.h"
+#include "time_manager.h"
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -38,16 +40,161 @@ static int find_module_index(const char* name) {
     return -1;
 }
 
-// 打印命令帮助
+// 打印完整命令帮助（整合所有模块）
 static void print_command_help(void) {
-    ESP_LOGI(TAG, "=== Command Help ===");
-    ESP_LOGI(TAG, "<module> 1/0        : Set module status (1=ON, 0=OFF)");
-    ESP_LOGI(TAG, "<module> delete     : Delete the module from preset list");
-    ESP_LOGI(TAG, "<module> pin <num>  : Set module control pin number(<=36)");
-    ESP_LOGI(TAG, "<module> status     : Show module current status and pin");
-    ESP_LOGI(TAG, "list                : List all preset modules");
-    ESP_LOGI(TAG, "help                : Show this help message");
-    ESP_LOGI(TAG, "=================");
+    ESP_LOGI(TAG, "=== 完整命令帮助 ===");
+    
+    // 系统命令部分
+    ESP_LOGI(TAG, "--- 系统命令 ---");
+    ESP_LOGI(TAG, "help               - 显示此帮助");
+    ESP_LOGI(TAG, "list               - 列出所有控制模块");
+    
+    // 模块管理部分
+    ESP_LOGI(TAG, "--- 模块管理 ---");
+    ESP_LOGI(TAG, "<module> 1/0        : 设置模块状态 (1=ON, 0=OFF)");
+    ESP_LOGI(TAG, "<module> delete     : 从预设列表中删除模块");
+    ESP_LOGI(TAG, "<module> pin <num>  : 设置模块控制引脚号 (0-36)");
+    ESP_LOGI(TAG, "<module> status     : 显示模块当前状态和引脚");
+    
+    // 补光灯控制部分
+    ESP_LOGI(TAG, "--- 补光灯控制 ---");
+    ESP_LOGI(TAG, "light set start HH:MM  - 设置开启时间");
+    ESP_LOGI(TAG, "light set end HH:MM    - 设置关闭时间");
+    ESP_LOGI(TAG, "light set duration X.X - 设置照明时长(小时)");
+    ESP_LOGI(TAG, "light on               - 手动开启");
+    ESP_LOGI(TAG, "light off              - 手动关闭");
+    ESP_LOGI(TAG, "light auto             - 切换为自动模式");
+    ESP_LOGI(TAG, "light status           - 显示状态");
+    ESP_LOGI(TAG, "light help             - 显示补光灯帮助");
+    
+    // 时间管理部分
+    ESP_LOGI(TAG, "--- 时间管理 ---");
+    ESP_LOGI(TAG, "time                  - 显示当前时间");
+    ESP_LOGI(TAG, "time get              - 显示当前时间");
+    ESP_LOGI(TAG, "time set Y/M/D H:M:S  - 设置系统时间");
+    ESP_LOGI(TAG, "time help             - 显示时间帮助");
+    
+    // 示例部分
+    ESP_LOGI(TAG, "--- 示例 ---");
+    ESP_LOGI(TAG, "模块管理: fan 1, pump pin 13, fan status");
+    ESP_LOGI(TAG, "补光灯: light set start 08:30, light auto");
+    ESP_LOGI(TAG, "时间: time set 2025/02/05 14:30:00");
+    ESP_LOGI(TAG, "=========================");
+}
+
+// 处理补光灯命令（从light_control_process_command移入）
+static void handle_light_command(const char* command) {
+    if (strncmp(command, "light set start ", 16) == 0) {
+        // 格式: light set start HH:MM
+        int hour, minute;
+        if (sscanf(command + 16, "%d:%d", &hour, &minute) == 2) {
+            if (light_control_set_start_time(hour, minute)) {
+                ESP_LOGI(TAG, "补光灯开启时间设置成功");
+            }
+        } else {
+            ESP_LOGI(TAG, "格式错误，正确格式: light set start HH:MM");
+        }
+    }
+    else if (strncmp(command, "light set end ", 14) == 0) {
+        // 格式: light set end HH:MM
+        int hour, minute;
+        if (sscanf(command + 14, "%d:%d", &hour, &minute) == 2) {
+            if (light_control_set_end_time(hour, minute)) {
+                ESP_LOGI(TAG, "补光灯关闭时间设置成功");
+            }
+        } else {
+            ESP_LOGI(TAG, "格式错误，正确格式: light set end HH:MM");
+        }
+    }
+    else if (strncmp(command, "light set duration ", 19) == 0) {
+        // 格式: light set duration X.X
+        float hours;
+        if (sscanf(command + 19, "%f", &hours) == 1) {
+            if (light_control_set_duration(hours)) {
+                ESP_LOGI(TAG, "补光灯照明时长设置成功");
+            }
+        } else {
+            ESP_LOGI(TAG, "格式错误，正确格式: light set duration X.X");
+        }
+    }
+    else if (strcmp(command, "light on") == 0) {
+        // 手动开启
+        light_control_manual_set(true);
+    }
+    else if (strcmp(command, "light off") == 0) {
+        // 手动关闭
+        light_control_manual_set(false);
+    }
+    else if (strcmp(command, "light auto") == 0) {
+        // 切回自动模式
+        light_control_set_auto_mode();
+    }
+    else if (strcmp(command, "light status") == 0) {
+        int start_hour = light_control_get_start_hour();
+        int start_minute = light_control_get_start_minute();
+        int end_hour = light_control_get_end_hour();
+        int end_minute = light_control_get_end_minute();
+        float duration = light_control_get_duration();
+        // 显示状态
+        ESP_LOGI(TAG, "=== 补光灯状态 ===");
+        ESP_LOGI(TAG, "开启时间: %02d:%02d", start_hour, start_minute);
+        ESP_LOGI(TAG, "关闭时间: %02d:%02d", end_hour, end_minute);
+        ESP_LOGI(TAG, "照明时长: %.1f小时", duration);
+        ESP_LOGI(TAG, "补光灯状态: %s", light_control_is_on() ? "开启" : "关闭");
+        ESP_LOGI(TAG, "模式: %s", light_control_is_manual_mode() ? "手动" : "自动");
+        ESP_LOGI(TAG, "================");
+    }
+    else if (strcmp(command, "light help") == 0) {
+        // 只显示补光灯部分帮助
+        ESP_LOGI(TAG, "=== 补光灯命令帮助 ===");
+        ESP_LOGI(TAG, "light set start HH:MM  - 设置开启时间");
+        ESP_LOGI(TAG, "light set end HH:MM    - 设置关闭时间");
+        ESP_LOGI(TAG, "light set duration X.X - 设置照明时长(小时)");
+        ESP_LOGI(TAG, "light on               - 手动开启");
+        ESP_LOGI(TAG, "light off              - 手动关闭");
+        ESP_LOGI(TAG, "light auto             - 切换为自动模式");
+        ESP_LOGI(TAG, "light status           - 显示状态");
+        ESP_LOGI(TAG, "=====================");
+    }
+    else {
+        ESP_LOGI(TAG, "未知的补光灯命令，输入 'light help' 查看帮助");
+    }
+}
+
+// 处理时间命令（从time_manager_process_command移入）
+static void handle_time_command(const char* command) {
+    // 检查是否为时间设置命令
+    if (strncmp(command, "time set ", 9) == 0) {
+        int year, month, day, hour, minute, second;
+        
+        // 解析格式: time set YYYY/MM/DD HH:MM:SS
+        int result = sscanf(command + 9, "%d/%d/%d %d:%d:%d",
+                           &year, &month, &day, &hour, &minute, &second);
+        
+        if (result == 6) {
+            if (time_manager_set_time(year, month, day, hour, minute, second)) {
+                ESP_LOGI(TAG, "时间设置成功: %s", time_manager_get_time_string());
+            } else {
+                ESP_LOGI(TAG, "时间设置失败，请检查参数");
+            }
+        } else {
+            ESP_LOGI(TAG, "时间格式错误");
+            ESP_LOGI(TAG, "正确格式: time set YYYY/MM/DD HH:MM:SS");
+            ESP_LOGI(TAG, "示例: time set 2025/02/05 14:30:00");
+        }
+    } else if (strcmp(command, "time") == 0 || strcmp(command, "time get") == 0) {
+        // 查询当前时间
+        ESP_LOGI(TAG, "当前时间: %s", time_manager_get_time_string());
+    } else if (strcmp(command, "time help") == 0) {
+        // 显示时间帮助
+        ESP_LOGI(TAG, "=== 时间命令帮助 ===");
+        ESP_LOGI(TAG, "time                  - 显示当前时间");
+        ESP_LOGI(TAG, "time get              - 显示当前时间");
+        ESP_LOGI(TAG, "time set Y/M/D H:M:S  - 设置系统时间");
+        ESP_LOGI(TAG, "===================");
+    } else {
+        ESP_LOGI(TAG, "未知的时间命令，输入 'time help' 查看帮助");
+    }
 }
 
 // 初始化函数
@@ -143,6 +290,18 @@ void command_processor_process_frame(const char* frame) {
             }
             ESP_LOGI(TAG, "=============================");
         }
+        return;
+    }
+
+    // --- 处理补光灯命令 ---
+    if (strncmp(frame, "light", 5) == 0) {
+        handle_light_command(frame);
+        return;
+    }
+
+    // --- 处理时间命令 ---
+    if (strncmp(frame, "time", 4) == 0) {
+        handle_time_command(frame);
         return;
     }
 

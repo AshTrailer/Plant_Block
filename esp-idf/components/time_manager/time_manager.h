@@ -28,7 +28,4 @@ const char* time_manager_get_time_string(void);
 // 更新时间（供未来的网络同步模块调用）
 void time_manager_update_time(int year, int month, int day, int hour, int minute, int second);
 
-// 处理时间相关命令（供主程序调用）
-void time_manager_process_command(const char* command);
-
 #endif

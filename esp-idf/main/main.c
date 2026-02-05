@@ -45,13 +45,8 @@ void app_main(void) {
         if (input_parser_frame_ready()) {
             const char* frame = input_parser_get_frame();
             if (frame != NULL) {
-                if (strncmp(frame, "light", 5) == 0) {
-                    light_control_process_command(frame);
-                } else if (strncmp(frame, "time", 4) == 0) {
-                    time_manager_process_command(frame);
-                } else {
-                    command_processor_process_frame(frame);
-                }
+                // 所有命令都交给 command_processor 处理
+                command_processor_process_frame(frame);
             }
         }
 

@@ -7,8 +7,8 @@
 static const char *TAG = "VENT_CTRL";
 
 // 默认通风周期（55分钟通风5分钟）-> 用于测试：20秒通风10秒
- #define DEFAULT_VENT_ON_SECONDS  5   // 通风5分钟
- #define DEFAULT_VENT_OFF_SECONDS 55  // 关闭55分钟
+ #define DEFAULT_VENT_ON_SECONDS  300   // 通风5分钟
+ #define DEFAULT_VENT_OFF_SECONDS 3300  // 关闭55分钟
 // 测试参数：
 // #define DEFAULT_VENT_ON_SECONDS  10   // 通风10秒
 // #define DEFAULT_VENT_OFF_SECONDS 20   // 关闭20秒

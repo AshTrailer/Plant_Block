@@ -6,4 +6,5 @@ idf_component_register(
         command_processor
         gpio_control
         ventilation_control
+        time_manager
 )

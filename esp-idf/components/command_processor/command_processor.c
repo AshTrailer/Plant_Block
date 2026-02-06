@@ -18,7 +18,7 @@ typedef struct {
 // 预定义的模块列表
 static module_info_t s_module_list[] = {
     {"fan", "通风控制", 1},      // 通风控制，GPIO1
-    {"light", "补光灯控制", 15}, // 补光灯控制，GPIO15
+    {"light", "补光灯控制", 15/14}, // 补光灯控制，GPIO15
 };
 
 static const int s_module_count = sizeof(s_module_list) / sizeof(s_module_list[0]);
@@ -133,14 +133,21 @@ static void handle_light_command(const char* command) {
         int end_hour = light_control_get_end_hour();
         int end_minute = light_control_get_end_minute();
         float duration = light_control_get_duration();
+        uint8_t pwm_duty = light_control_get_pwm_duty();
+        light_state_t state = light_control_get_state();
+        
         // 显示状态
         ESP_LOGI(TAG, "=== 补光灯状态 ===");
         ESP_LOGI(TAG, "开启时间: %02d:%02d", start_hour, start_minute);
         ESP_LOGI(TAG, "关闭时间: %02d:%02d", end_hour, end_minute);
         ESP_LOGI(TAG, "照明时长: %.1f小时", duration);
-        ESP_LOGI(TAG, "补光灯状态: %s", light_control_is_on() ? "开启" : "关闭");
+        ESP_LOGI(TAG, "当前状态: %s", 
+                 state == LIGHT_STATE_OFF ? "关闭" : 
+                 state == LIGHT_STATE_ON ? "开启(开关模式)" : "开启(PWM模式)");
+        ESP_LOGI(TAG, "PWM占空比: %d%%", pwm_duty);
         ESP_LOGI(TAG, "模式: %s", light_control_is_manual_mode() ? "手动" : "自动");
-        ESP_LOGI(TAG, "控制引脚: GPIO%d", 15);
+        ESP_LOGI(TAG, "开关引脚: GPIO%d", light_control_get_pin());
+        ESP_LOGI(TAG, "PWM引脚: GPIO%d", light_control_get_pwm_pin());
         ESP_LOGI(TAG, "================");
     }
     else {

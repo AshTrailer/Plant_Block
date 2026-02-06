@@ -8,7 +8,6 @@
 #include "gpio_control.h"
 #include "ventilation_control.h"
 #include "light_control.h"
-#include "pwm_test.h"
 
 void app_main(void) {
     ESP_LOGI("MAIN", "System starting, initializing components...");
@@ -31,10 +30,7 @@ void app_main(void) {
     ventilation_control_start();
 
     ESP_LOGI("MAIN", "Initializing Light Control...");
-    light_control_init(15);
-
-    ESP_LOGI("MAIN", "Initializing PWM Test...");
-    pwm_test_init(14);
+    light_control_init(15, 14);
 
     ESP_LOGI("MAIN", "All components initialized.");
 
@@ -47,13 +43,8 @@ void app_main(void) {
             const char* frame = input_parser_get_frame();
             if (frame != NULL) {
 
-                //command_processor_process_frame(frame);
+                command_processor_process_frame(frame);
 
-                if (strncmp(frame, "pwm", 3) == 0) {
-                    pwm_test_process_command(frame);
-                }else {
-                    command_processor_process_frame(frame);
-                }
             }
         }
 

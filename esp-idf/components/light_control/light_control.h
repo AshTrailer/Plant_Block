@@ -2,17 +2,18 @@
 #define LIGHT_CONTROL_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #include "time_manager.h"  // 依赖时间管理模块
 
 // 补光灯状态枚举
 typedef enum {
     LIGHT_STATE_OFF,     // 关闭状态
     LIGHT_STATE_ON,      // 开启状态（无PWM）
-    LIGHT_STATE_PWM      // PWM模式（预留）
+    LIGHT_STATE_PWM      // PWM模式
 } light_state_t;
 
 // 初始化补光灯控制模块
-void light_control_init(int control_pin);
+void light_control_init(int control_pin, int pwm_pin);
 
 // 补光灯状态轮询函数（需在主循环中定期调用）
 void light_control_poll(void);
@@ -61,5 +62,11 @@ float light_control_get_duration(void);
 
 // 获取补光灯控制引脚号
 int light_control_get_pin(void);
+
+// 获取当前PWM占空比
+uint8_t light_control_get_pwm_duty(void);
+
+// 获取PWM控制引脚号
+int light_control_get_pwm_pin(void);
 
 #endif

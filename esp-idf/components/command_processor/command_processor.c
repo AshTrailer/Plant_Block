@@ -72,10 +72,11 @@ static void handle_module_list(void) {
     // 补光灯控制模块（light）
     bool light_state = light_control_is_on();
     int light_pin = light_control_get_pin();
-    ESP_LOGI(TAG, "%-8s %-8s  GPIO%d",
+    int pwm_pin = light_control_get_pwm_pin();
+    ESP_LOGI(TAG, "%-8s %-8s  GPIO%d/GPIO%d",
              "light",
              light_state ? "ON" : "OFF",
-             light_pin);
+             light_pin, pwm_pin);
     
     ESP_LOGI(TAG, "===================");
 }

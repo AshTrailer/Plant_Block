@@ -53,7 +53,9 @@ static light_schedule_t s_schedule = {
 static light_state_t s_current_state = LIGHT_STATE_OFF;
 static uint8_t s_current_pwm_duty = 0;  // 当前PWM占空比（0-100%）
 static TickType_t s_last_update_ticks = 0;
+static TickType_t s_last_pwm_update_ticks = 0;
 static const TickType_t s_update_interval_ticks = 1000 / portTICK_PERIOD_MS; // 1秒
+static const TickType_t s_pwm_update_interval_ticks = 30000 / portTICK_PERIOD_MS; // 30秒（PWM更新）
 static bool s_pwm_initialized = false;
 
 // 检查时间参数有效性
@@ -343,12 +345,16 @@ void light_control_update(void) {
     bool should_be_on = should_light_be_on();
     bool is_currently_on = light_control_is_on();
     
-    // 状态发生变化时更新
+    // 状态发生变化时更新（每秒检查）
     if (should_be_on != is_currently_on) {
         if (should_be_on) {
             s_current_state = LIGHT_STATE_PWM; // 自动模式下使用PWM
             gpio_control_set_level(s_schedule.control_pin, true); // 打开主开关
             ESP_LOGI(TAG, "补光灯自动开启");
+            
+            // 开启时立即更新一次PWM
+            uint8_t target_duty = calculate_auto_pwm_duty();
+            set_pwm_duty(target_duty);
         } else {
             s_current_state = LIGHT_STATE_OFF;
             gpio_control_set_level(s_schedule.control_pin, false); // 关闭主开关
@@ -356,12 +362,22 @@ void light_control_update(void) {
             ESP_LOGI(TAG, "补光灯自动关闭");
         }
     }
+}
+
+// 更新PWM占空比（独立于开关状态更新）
+static void update_pwm_duty(void) {
+    if (s_schedule.is_manual_mode) {
+        // 手动模式下不更新PWM
+        return;
+    }
     
     // 如果灯是开启状态（自动模式下），更新PWM占空比
+    bool should_be_on = should_light_be_on();
     if (should_be_on && s_pwm_initialized) {
         uint8_t target_duty = calculate_auto_pwm_duty();
         if (target_duty != s_current_pwm_duty) {
             set_pwm_duty(target_duty);
+            ESP_LOGI(TAG, "更新光照PWM: %d%%", target_duty);
         }
     }
 }
@@ -402,10 +418,16 @@ void light_control_manual_set(bool on) {
 void light_control_poll(void) {
     TickType_t current_ticks = xTaskGetTickCount();
     
-    // 检查是否到达更新间隔（1秒）
+    // 检查是否到达开关状态更新间隔（1秒）
     if ((current_ticks - s_last_update_ticks) >= s_update_interval_ticks) {
         light_control_update();  // 调用更新函数
         s_last_update_ticks = current_ticks;
+    }
+    
+    // 检查是否到达PWM更新间隔（30秒）
+    if ((current_ticks - s_last_pwm_update_ticks) >= s_pwm_update_interval_ticks) {
+        update_pwm_duty();  // 调用PWM更新函数
+        s_last_pwm_update_ticks = current_ticks;
     }
 }
 

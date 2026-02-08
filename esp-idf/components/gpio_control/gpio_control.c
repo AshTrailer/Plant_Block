@@ -8,6 +8,7 @@ static const char *TAG = "GPIO_CONTROL";
 
 // 初始化时配置的GPIO引脚列表
 static const int s_managed_pins[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 14, 15, 18};
+//static const int s_managed_pins[] = {14,15,2};
 static const int s_managed_pin_count = sizeof(s_managed_pins) / sizeof(s_managed_pins[0]);
 
 // 检查引脚号是否在受管理的列表中
@@ -92,4 +93,4 @@ void gpio_control_deinit(void) {
     gpio_reset_pin(GPIO_NUM_9);
     
     ESP_LOGI(TAG, "GPIO Control Deinitialization Complete");
-}
+}   

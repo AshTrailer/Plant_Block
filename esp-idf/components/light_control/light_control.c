@@ -15,7 +15,7 @@ static const char *TAG = "LIGHT_CTRL";
 #define PWM_MODE           LEDC_LOW_SPEED_MODE
 #define PWM_CHANNEL        LEDC_CHANNEL_0
 #define PWM_FREQUENCY_HZ   19000     // 19kHz
-#define PWM_RESOLUTION     LEDC_TIMER_12_BIT
+#define PWM_RESOLUTION     LEDC_TIMER_12_BIT//LEDC_TIMER_10_BIT
 #define PWM_MAX_DUTY       4095      // 2^12 - 1
 #define PWM_MIN_DUTY_PERCENT 2       // 最小占空比2%
 #define PWM_MAX_DUTY_PERCENT 100     // 最大占空比100%

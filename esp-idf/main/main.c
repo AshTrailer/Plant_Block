@@ -26,11 +26,11 @@ void app_main(void) {
     command_processor_init();
 
     ESP_LOGI("MAIN", "Initializing Ventilation Control...");
-    ventilation_control_init(1);
+    ventilation_control_init(2);
     ventilation_control_start();
 
     ESP_LOGI("MAIN", "Initializing Light Control...");
-    light_control_init(15, 14);
+    light_control_init(25, 14);
 
     ESP_LOGI("MAIN", "All components initialized.");
 

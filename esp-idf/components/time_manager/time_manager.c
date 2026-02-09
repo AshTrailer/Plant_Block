@@ -10,11 +10,11 @@ static const char *TAG = "TIME_MGR";
 
 // 内部时间变量
 static system_time_t s_current_time = {
-    .year = 1970,
-    .month = 1,
-    .day = 1,
-    .hour = 0,
-    .minute = 0,
+    .year = 2026,
+    .month = 2,
+    .day = 9,
+    .hour = 8,
+    .minute = 25,
     .second = 0
 };
 

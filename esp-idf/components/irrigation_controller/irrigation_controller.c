@@ -334,7 +334,7 @@ void irrigation_controller_poll(void) {
             // 处理周最小浇水逻辑
             handle_week_minimum_watering();
 
-            // 强制检查：时间重置后立即触发一次浇水判断
+            // ===== 强制检查（时间重置后立即触发一次）=====
             if (s_state.force_check_needed) {
                 ESP_LOGI(TAG, "强制浇水检查（时间重置后）");
                 start_sensor_power();
@@ -347,10 +347,15 @@ void irrigation_controller_poll(void) {
                     NULL
                 );
                 s_state.force_check_needed = false;
+                
+                // 强制检查后，将上次检查时间设置为当前时间，
+                // 避免紧接着的4小时检查立即触发
+                s_state.last_check_time = time_manager_get_unix_time();
+            } 
+            // ===== 正常4小时周期检查 =====
+            else {
+                check_watering_schedule();
             }
-
-            // 正常4小时周期检查
-            check_watering_schedule();
         }
         
         s_last_poll_ticks = current_ticks;

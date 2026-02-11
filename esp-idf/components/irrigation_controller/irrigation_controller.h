@@ -40,4 +40,7 @@ bool irrigation_controller_get_sensor_power_status(void);
 // 重置本周浇水次数
 bool irrigation_controller_reset_week(void);
 
+// 通知时间重置（当系统时间被设置时调用）
+void irrigation_controller_notify_time_reset(void);
+
 #endif

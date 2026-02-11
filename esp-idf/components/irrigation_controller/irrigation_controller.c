@@ -29,6 +29,8 @@ typedef struct {
     time_t last_check_time; // 上次检查时间（Unix时间戳）
     int sim_moisture;       // 模拟土壤湿度值（测试用）
     bool test_mode;         // 测试模式（跳过4小时限制）
+    bool time_reset_needed; // 时间重置标志
+    bool force_check_needed;
 } irrigation_state_t;
 
 static irrigation_config_t s_config = {
@@ -48,7 +50,10 @@ static irrigation_state_t s_state = {
     .last_check_time = 0,
     .sim_moisture = 0,
     .test_mode = false,
+    .time_reset_needed = false,
+    .force_check_needed = false,
 };
+
 
 static TickType_t s_last_poll_ticks = 0;
 static const TickType_t s_poll_interval_ticks = 1000 / portTICK_PERIOD_MS; // 1秒
@@ -57,61 +62,6 @@ static const TickType_t s_poll_interval_ticks = 1000 / portTICK_PERIOD_MS; // 1�
 static void watering_task(void *arg);
 static void makeup_watering_task(void *arg);
 static void sensor_check_task(void *arg);
-
-// ISO8601周数计算函数
-static int get_iso_week_number(int year, int month, int day) {
-    // 简化版ISO8601周数计算
-    // 这里使用一个简化的实现，实际应用可能需要更精确的计算
-    // 或者使用标准库函数
-    
-    // 计算该日期是一年中的第几天
-    int days_in_month[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-    
-    // 闰年检查
-    if ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)) {
-        days_in_month[1] = 29;
-    }
-    
-    int day_of_year = day;
-    for (int i = 0; i < month - 1; i++) {
-        day_of_year += days_in_month[i];
-    }
-    
-    // 计算1月1日是星期几
-    // 使用Zeller's congruence算法计算星期
-    int y = year;
-    int m = month;
-    int d = day;
-    
-    if (m < 3) {
-        m += 12;
-        y--;
-    }
-    
-    int century = y / 100;
-    int year_of_century = y % 100;
-    
-    int weekday = (d + (13 * (m + 1)) / 5 + year_of_century + 
-                   year_of_century / 4 + century / 4 - 2 * century) % 7;
-    
-    // 调整结果为0=星期六，1=星期日，...，6=星期五
-    weekday = (weekday + 6) % 7;
-    
-    // 计算ISO周数
-    // 第一周是包含1月4日的周
-    int iso_week = (day_of_year - weekday + 10) / 7;
-    
-    // 处理边界情况
-    if (iso_week < 1) {
-        // 上一年的最后一周
-        iso_week = 52;
-    } else if (iso_week > 52) {
-        // 下一年的第一周
-        iso_week = 1;
-    }
-    
-    return iso_week;
-}
 
 // 检查是否为新的一周（周一00:00）
 static bool is_new_week(void) {
@@ -124,12 +74,8 @@ static bool is_new_week(void) {
         current_time.minute == 0 && 
         current_time.second == 0) {
         
-        // 计算当前ISO周数
-        int iso_week = get_iso_week_number(
-            current_time.year, 
-            current_time.month, 
-            current_time.day
-        );
+        // 调用time_manager的ISO周数计算
+        int iso_week = time_manager_get_current_iso_week();
         
         // 如果周数不同，则是新的一周
         if (iso_week != s_state.current_week) {
@@ -137,7 +83,6 @@ static bool is_new_week(void) {
             return true;
         }
     }
-    
     return false;
 }
 
@@ -190,6 +135,36 @@ static bool should_water_now(int moisture_value) {
     ESP_LOGI(TAG, "触发浇水条件: 湿度 %d%% < 阈值 %d%%", 
             moisture_value, s_config.trigger_threshold);
     return true;
+}
+
+// 检查时间是否被重置（如果当前时间小于上次记录的时间，说明时间被设置到过去了）
+static void check_time_reset(void) {
+    if (s_state.time_reset_needed) {
+        time_t current_time = time_manager_get_unix_time();
+
+        // ===== 修复 1：重置周计数 =====
+        s_state.current_week = time_manager_get_current_iso_week();
+        s_state.week_water_count = 0;
+        ESP_LOGI(TAG, "时间重置：周数更新为 %d，本周浇水次数已清零", s_state.current_week);
+
+        // ===== 修复 2：处理浇水时间（时间倒流时清零）=====
+        if (s_state.last_water_time > 0 && difftime(s_state.last_water_time, current_time) > 0) {
+            s_state.last_water_time = 0;   // 未来发生的浇水记录无效
+            ESP_LOGI(TAG, "时间重置：上次浇水时间在未来，已清零");
+        }
+
+        // ===== 修复 3：处理检查时间（时间倒流时重置）=====
+        if (s_state.last_check_time > 0 && difftime(s_state.last_check_time, current_time) > 0) {
+            s_state.last_check_time = current_time;
+            ESP_LOGI(TAG, "时间重置：上次检查时间已更新为当前时间");
+        }
+
+        // ===== 修复 4：设置强制检查标志 =====
+        s_state.force_check_needed = true;
+
+        s_state.time_reset_needed = false;
+        ESP_LOGI(TAG, "时间重置处理完成");
+    }
 }
 
 // 浇水任务函数
@@ -334,15 +309,10 @@ static void check_watering_schedule(void) {
 void irrigation_controller_init(int pump_pin) {
     s_config.pump_pin = pump_pin;
     
-    // 获取当前周数
-    system_time_t current_time = time_manager_get_time();
-    s_state.current_week = get_iso_week_number(
-        current_time.year, 
-        current_time.month, 
-        current_time.day
-    );
+    // 获取当前ISO周数（直接调用time_manager）
+    s_state.current_week = time_manager_get_current_iso_week();
     
-    s_state.last_check_time = time_manager_get_unix_time();  // 初始化检查时间
+    s_state.last_check_time = time_manager_get_unix_time();
     
     ESP_LOGI(TAG, "浇水控制模块初始化完成");
     ESP_LOGI(TAG, "水泵控制引脚: GPIO%d", pump_pin);
@@ -357,9 +327,29 @@ void irrigation_controller_poll(void) {
     TickType_t current_ticks = xTaskGetTickCount();
     
     if ((current_ticks - s_last_poll_ticks) >= s_poll_interval_ticks) {
+        // 先处理时间重置（无论测试模式）
+        check_time_reset();
+
         if (!s_state.test_mode) {
-            // 正常模式：处理周最小浇水逻辑和4小时检查
+            // 处理周最小浇水逻辑
             handle_week_minimum_watering();
+
+            // 强制检查：时间重置后立即触发一次浇水判断
+            if (s_state.force_check_needed) {
+                ESP_LOGI(TAG, "强制浇水检查（时间重置后）");
+                start_sensor_power();
+                xTaskCreate(
+                    sensor_check_task,
+                    "sensor_check_task",
+                    2048,
+                    NULL,
+                    2,
+                    NULL
+                );
+                s_state.force_check_needed = false;
+            }
+
+            // 正常4小时周期检查
             check_watering_schedule();
         }
         
@@ -478,4 +468,10 @@ bool irrigation_controller_reset_week(void) {
     s_state.week_water_count = 0;
     ESP_LOGI(TAG, "本周浇水次数已重置为0");
     return true;
+}
+
+// 通知时间重置（当系统时间被设置时调用）
+void irrigation_controller_notify_time_reset(void) {
+    s_state.time_reset_needed = true;
+    ESP_LOGI(TAG, "时间重置通知已接收");
 }

@@ -286,6 +286,7 @@ static void handle_time_command(const char* command) {
                            &year, &month, &day, &hour, &minute, &second);
         
         if (result == 6) {
+            irrigation_controller_notify_time_reset(); // 通知浇水控制模块时间被重置
             if (time_manager_set_time(year, month, day, hour, minute, second)) {
                 ESP_LOGI(TAG, "时间设置成功: %s", time_manager_get_time_string());
             } else {

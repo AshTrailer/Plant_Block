@@ -31,6 +31,62 @@ static char s_time_string[64];
 static TaskHandle_t s_time_task_handle = NULL;
 static bool s_time_task_running = false;
 
+// 计算指定日期的ISO周数
+int time_manager_get_iso_week_number(int year, int month, int day) {
+    // 计算该日期是一年中的第几天
+    int days_in_month[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    
+    // 闰年检查
+    if ((year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)) {
+        days_in_month[1] = 29;
+    }
+    
+    int day_of_year = day;
+    for (int i = 0; i < month - 1; i++) {
+        day_of_year += days_in_month[i];
+    }
+    
+    // 计算该日期的星期几（使用Zeller's congruence）
+    int y = year;
+    int m = month;
+    int d = day;
+    
+    if (m < 3) {
+        m += 12;
+        y--;
+    }
+    
+    int century = y / 100;
+    int year_of_century = y % 100;
+    
+    int weekday = (d + (13 * (m + 1)) / 5 + year_of_century + 
+                   year_of_century / 4 + century / 4 - 2 * century) % 7;
+    
+    // 调整结果为0=星期六，1=星期日，...，6=星期五
+    weekday = (weekday + 6) % 7;
+    
+    // ISO周数计算公式
+    int iso_week = (day_of_year - weekday + 10) / 7;
+    
+    // 边界处理
+    if (iso_week < 1) {
+        // 上一年的最后一周
+        // 简单处理，实际需要更精确的计算
+        iso_week = 52;
+    } else if (iso_week > 52) {
+        // 下一年的第一周
+        iso_week = 1;
+    }
+    
+    return iso_week;
+}
+
+// 获取当前日期的ISO周数
+int time_manager_get_current_iso_week(void) {
+    system_time_t now = time_manager_get_time();
+    return time_manager_get_iso_week_number(now.year, now.month, now.day);
+}
+
 // 星期字符串数组（中文）
 static const char* s_weekday_strings_cn[] = {
     "星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"

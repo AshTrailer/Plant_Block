@@ -7,7 +7,6 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
-#include <time.h>  // 添加time.h头文件
 
 static const char *TAG = "IRRIGATION";
 
@@ -58,7 +57,6 @@ static const TickType_t s_poll_interval_ticks = 1000 / portTICK_PERIOD_MS; // 1�
 static void watering_task(void *arg);
 static void makeup_watering_task(void *arg);
 static void sensor_check_task(void *arg);
-static void test_watering_task(void *arg);
 
 // ISO8601周数计算函数
 static int get_iso_week_number(int year, int month, int day) {
@@ -163,16 +161,17 @@ static void stop_sensor_power(void) {
 static bool should_water_now(int moisture_value) {
     // 1. 检查土壤湿度是否低于阈值
     if (moisture_value >= s_config.trigger_threshold) {
-        ESP_LOGI(TAG, "土壤湿度 %d%% 大于等于阈值 %d%%，不浇水", 
+        ESP_LOGI(TAG, "土壤湿度 %d%% 高于阈值 %d%%，不浇水", 
                 moisture_value, s_config.trigger_threshold);
         return false;
     }
     
     // 2. 检查4小时内是否已经浇过水（测试模式下跳过）
     if (!s_state.test_mode) {
-        time_t now = time(NULL);
         if (s_state.last_water_time > 0) {
+            time_t now = time_manager_get_unix_time();  // 使用time_manager的Unix时间戳
             double hours_since_last = difftime(now, s_state.last_water_time) / 3600.0;
+            
             if (hours_since_last < 4.0) {
                 ESP_LOGI(TAG, "距离上次浇水 %.1f 小时，不足4小时，不浇水", hours_since_last);
                 return false;
@@ -219,7 +218,7 @@ static void start_watering(void) {
     
     s_state.is_watering = true;
     s_state.week_water_count++;
-    s_state.last_water_time = time(NULL);
+    s_state.last_water_time = time_manager_get_unix_time();  // 记录当前Unix时间
     
     // 开启水泵
     gpio_control_set_level(s_config.pump_pin, true);
@@ -308,7 +307,7 @@ static void sensor_check_task(void *arg) {
 
 // 每4小时检查一次是否需要浇水
 static void check_watering_schedule(void) {
-    time_t now = time(NULL);
+    time_t now = time_manager_get_unix_time();  // 使用time_manager的Unix时间戳
     
     // 每4小时检查一次（14400秒）
     if (difftime(now, s_state.last_check_time) >= 14400.0) {
@@ -331,30 +330,9 @@ static void check_watering_schedule(void) {
     }
 }
 
-// 测试浇水任务函数
-static void test_watering_task(void *arg) {
-    vTaskDelay(2000 / portTICK_PERIOD_MS);
-    
-    ESP_LOGI(TAG, "测试模式: 模拟湿度 %d%%", s_state.sim_moisture);
-    
-    if (should_water_now(s_state.sim_moisture)) {
-        start_watering();
-    } else {
-        ESP_LOGI(TAG, "测试模式: 未触发浇水");
-    }
-    
-    stop_sensor_power();
-    s_state.test_mode = false;
-    
-    vTaskDelete(NULL);
-}
-
 // 初始化浇水控制模块
 void irrigation_controller_init(int pump_pin) {
     s_config.pump_pin = pump_pin;
-    
-    // 初始化GPIO
-    // gpio_control_set_level(pump_pin, false);
     
     // 获取当前周数
     system_time_t current_time = time_manager_get_time();
@@ -364,7 +342,7 @@ void irrigation_controller_init(int pump_pin) {
         current_time.day
     );
     
-    s_state.last_check_time = time(NULL);
+    s_state.last_check_time = time_manager_get_unix_time();  // 初始化检查时间
     
     ESP_LOGI(TAG, "浇水控制模块初始化完成");
     ESP_LOGI(TAG, "水泵控制引脚: GPIO%d", pump_pin);
@@ -493,4 +471,11 @@ void irrigation_controller_manual_trigger(void) {
 // 获取传感器启动信号状态
 bool irrigation_controller_get_sensor_power_status(void) {
     return s_state.sensor_power;
+}
+
+// 重置浇水次数
+bool irrigation_controller_reset_week(void) {
+    s_state.week_water_count = 0;
+    ESP_LOGI(TAG, "本周浇水次数已重置为0");
+    return true;
 }

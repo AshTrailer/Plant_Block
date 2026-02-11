@@ -5,6 +5,7 @@
 #include "freertos/semphr.h"
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
 static const char *TAG = "TIME_MGR";
 
@@ -16,7 +17,8 @@ static system_time_t s_current_time = {
     .hour = 0,
     .minute = 0,
     .second = 0,
-    .weekday = 4  // 1970年1月1日是星期四
+    .weekday = 4,  // 1970年1月1日是星期四
+    .unix_time = 0
 };
 
 // 互斥锁保护时间数据
@@ -65,6 +67,40 @@ static int get_days_in_month(int year, int month) {
     return days_per_month[month - 1];
 }
 
+// 计算指定日期到1970年1月1日的天数
+static int days_since_1970(int year, int month, int day) {
+    int days = 0;
+    
+    // 计算从1970年到year-1年的天数
+    for (int y = 1970; y < year; y++) {
+        days += is_leap_year(y) ? 366 : 365;
+    }
+    
+    // 计算当年1月1日到当前月份的天数
+    for (int m = 1; m < month; m++) {
+        days += get_days_in_month(year, m);
+    }
+    
+    // 加上当前月的天数（day从1开始，所以需要减1）
+    days += (day - 1);
+    
+    return days;
+}
+
+// 计算Unix时间戳（从1970年1月1日00:00:00开始的秒数）
+static time_t calculate_unix_time(int year, int month, int day, int hour, int minute, int second) {
+    // 计算天数
+    int days = days_since_1970(year, month, day);
+    
+    // 转换为秒数
+    time_t unix_time = (time_t)days * 24 * 3600;
+    unix_time += hour * 3600;
+    unix_time += minute * 60;
+    unix_time += second;
+    
+    return unix_time;
+}
+
 // 边界检查函数
 static bool check_time_boundaries(int month, int hour, int minute, int second) {
     if (month < 1 || month > 12) {
@@ -105,13 +141,92 @@ static int calculate_weekday(int year, int month, int day) {
     return (weekday + 6) % 7;
 }
 
-// 更新星期几
-static void update_weekday(void) {
+// 从Unix时间戳解析为日期时间
+static void parse_unix_time(time_t unix_time, system_time_t* time_struct) {
+    time_t remaining_seconds = unix_time;
+    
+    // 计算年份
+    int year = 1970;
+    while (1) {
+        int days_in_year = is_leap_year(year) ? 366 : 365;
+        time_t seconds_in_year = days_in_year * 24 * 3600;
+        
+        if (remaining_seconds < seconds_in_year) {
+            break;
+        }
+        remaining_seconds -= seconds_in_year;
+        year++;
+    }
+    
+    // 计算月份
+    int month = 1;
+    while (1) {
+        int days_in_month = get_days_in_month(year, month);
+        time_t seconds_in_month = days_in_month * 24 * 3600;
+        
+        if (remaining_seconds < seconds_in_month) {
+            break;
+        }
+        remaining_seconds -= seconds_in_month;
+        month++;
+    }
+    
+    // 计算天数（注意：剩余秒数现在是该月第0天的秒数）
+    int day = (int)(remaining_seconds / (24 * 3600)) + 1;
+    remaining_seconds %= (24 * 3600);
+    
+    // 计算小时、分钟、秒
+    int hour = (int)(remaining_seconds / 3600);
+    remaining_seconds %= 3600;
+    
+    int minute = (int)(remaining_seconds / 60);
+    int second = (int)(remaining_seconds % 60);
+    
+    // 计算星期几
+    int weekday = calculate_weekday(year, month, day);
+    
+    // 填充结构体
+    time_struct->year = year;
+    time_struct->month = month;
+    time_struct->day = day;
+    time_struct->hour = hour;
+    time_struct->minute = minute;
+    time_struct->second = second;
+    time_struct->weekday = weekday;
+    time_struct->unix_time = unix_time;
+}
+
+// 更新星期几和Unix时间戳
+static void update_time_metadata(void) {
+    // 更新星期几
     s_current_time.weekday = calculate_weekday(
         s_current_time.year, 
         s_current_time.month, 
         s_current_time.day
     );
+    
+    // 更新Unix时间戳
+    s_current_time.unix_time = calculate_unix_time(
+        s_current_time.year,
+        s_current_time.month,
+        s_current_time.day,
+        s_current_time.hour,
+        s_current_time.minute,
+        s_current_time.second
+    );
+}
+
+// 更新时间字符串
+static void update_time_string(void) {
+    snprintf(s_time_string, sizeof(s_time_string),
+            "%04d/%02d/%02d %02d:%02d:%02d %s",
+            s_current_time.year,
+            s_current_time.month,
+            s_current_time.day,
+            s_current_time.hour,
+            s_current_time.minute,
+            s_current_time.second,
+            s_weekday_strings_cn[s_current_time.weekday]);
 }
 
 // 时间递增任务（每秒更新一次）
@@ -140,8 +255,8 @@ static void time_update_task(void *arg) {
                         s_current_time.hour = 0;
                         s_current_time.day++;
                         
-                        // 日期变化，需要重新计算星期几
-                        update_weekday();
+                        // 日期变化，需要重新计算星期几和Unix时间戳
+                        update_time_metadata();
                         
                         // 获取当前月份的实际天数
                         int days_in_current_month = get_days_in_month(
@@ -154,32 +269,27 @@ static void time_update_task(void *arg) {
                             s_current_time.day = 1;
                             s_current_time.month++;
                             
-                            // 月份变化，需要重新计算星期几
-                            update_weekday();
+                            // 月份变化，需要重新计算星期几和Unix时间戳
+                            update_time_metadata();
                             
                             // 处理进位：月→年
                             if (s_current_time.month > 12) {
                                 s_current_time.month = 1;
                                 s_current_time.year++;
                                 
-                                // 年份变化，需要重新计算星期几
-                                update_weekday();
+                                // 年份变化，需要重新计算星期几和Unix时间戳
+                                update_time_metadata();
                             }
                         }
                     }
                 }
             }
             
+            // 更新Unix时间戳（简单递增）
+            s_current_time.unix_time++;
+            
             // 更新时间字符串
-            snprintf(s_time_string, sizeof(s_time_string),
-                    "%04d/%02d/%02d %02d:%02d:%02d %s",
-                    s_current_time.year,
-                    s_current_time.month,
-                    s_current_time.day,
-                    s_current_time.hour,
-                    s_current_time.minute,
-                    s_current_time.second,
-                    s_weekday_strings_cn[s_current_time.weekday]);
+            update_time_string();
             
             xSemaphoreGive(s_time_mutex);
         }
@@ -195,19 +305,11 @@ void time_manager_init(void) {
         return;
     }
 
-    // 计算初始时间的星期几
-    update_weekday();
+    // 计算初始时间的星期几和Unix时间戳
+    update_time_metadata();
     
     // 初始化时间字符串
-    snprintf(s_time_string, sizeof(s_time_string),
-            "%04d/%02d/%02d %02d:%02d:%02d %s",
-            s_current_time.year,
-            s_current_time.month,
-            s_current_time.day,
-            s_current_time.hour,
-            s_current_time.minute,
-            s_current_time.second,
-            s_weekday_strings_cn[s_current_time.weekday]);
+    update_time_string();
 
     // 创建时间更新任务
     xTaskCreate(time_update_task,
@@ -221,6 +323,7 @@ void time_manager_init(void) {
         s_time_task_running = true;
         ESP_LOGI(TAG, "Time Manager Initialized");
         ESP_LOGI(TAG, "Initial time: %s", s_time_string);
+        ESP_LOGI(TAG, "Unix timestamp: %ld", s_current_time.unix_time);
     } else {
         ESP_LOGE(TAG, "Create time update task failed");
     }
@@ -254,18 +357,40 @@ bool time_manager_set_time(int year, int month, int day, int hour, int minute, i
         s_current_time.minute = minute;
         s_current_time.second = second;
 
-        // 更新星期几
-        update_weekday();
+        // 更新星期几和Unix时间戳
+        update_time_metadata();
         
         // 更新时间字符串
-        snprintf(s_time_string, sizeof(s_time_string),
-                "%04d/%02d/%02d %02d:%02d:%02d %s",
-                year, month, day, hour, minute, second,
-                s_weekday_strings_cn[s_current_time.weekday]);
+        update_time_string();
         
         xSemaphoreGive(s_time_mutex);
         
         ESP_LOGI(TAG, "Time set to: %s", s_time_string);
+        ESP_LOGI(TAG, "Unix timestamp: %ld", s_current_time.unix_time);
+        return true;
+    }
+    
+    return false;
+}
+
+// 从Unix时间戳设置系统时间
+bool time_manager_set_time_from_unix(time_t unix_time) {
+    if (unix_time < 0) {
+        ESP_LOGE(TAG, "Unix time should be positive");
+        return false;
+    }
+    
+    if (xSemaphoreTake(s_time_mutex, portMAX_DELAY) == pdTRUE) {
+        // 解析Unix时间戳
+        parse_unix_time(unix_time, &s_current_time);
+        
+        // 更新时间字符串
+        update_time_string();
+        
+        xSemaphoreGive(s_time_mutex);
+        
+        ESP_LOGI(TAG, "Time set from Unix timestamp: %s", s_time_string);
+        ESP_LOGI(TAG, "Unix timestamp: %ld", s_current_time.unix_time);
         return true;
     }
     
@@ -282,6 +407,18 @@ system_time_t time_manager_get_time(void) {
     }
     
     return time_copy;
+}
+
+// 获取当前Unix时间戳
+time_t time_manager_get_unix_time(void) {
+    time_t unix_time = 0;
+    
+    if (xSemaphoreTake(s_time_mutex, portMAX_DELAY) == pdTRUE) {
+        unix_time = s_current_time.unix_time;
+        xSemaphoreGive(s_time_mutex);
+    }
+    
+    return unix_time;
 }
 
 // 获取时间字符串

@@ -105,7 +105,6 @@ static void handle_module_list(void) {
 }
 
 // 处理浇水控制命令
-// 处理浇水控制命令
 static void handle_irrigation_command(const char* command) {
     // 检查是否为带"irrigation "前缀的命令
     if (strncmp(command, "irrigation ", 11) == 0) {
@@ -115,11 +114,7 @@ static void handle_irrigation_command(const char* command) {
         if (strncmp(sub_command, "set threshold ", 14) == 0) {
             int threshold;
             if (sscanf(sub_command + 14, "%d", &threshold) == 1) {
-                if (irrigation_controller_set_threshold(threshold)) {
-                    ESP_LOGI(TAG, "触发阈值设置为: %d%%", threshold);
-                } else {
-                    ESP_LOGI(TAG, "阈值设置失败");
-                }
+                irrigation_controller_set_threshold(threshold);
             } else {
                 ESP_LOGI(TAG, "格式错误，正确格式: irrigation set threshold <0-100>");
             }
@@ -128,11 +123,7 @@ static void handle_irrigation_command(const char* command) {
         else if (strncmp(sub_command, "set duration ", 13) == 0) {
             float duration;
             if (sscanf(sub_command + 13, "%f", &duration) == 1) {
-                if (irrigation_controller_set_duration(duration)) {
-                    ESP_LOGI(TAG, "单次浇水时长设置为: %.1f秒", duration);
-                } else {
-                    ESP_LOGI(TAG, "浇水时长设置失败");
-                }
+                irrigation_controller_set_duration(duration);
             } else {
                 ESP_LOGI(TAG, "格式错误，正确格式: irrigation set duration <秒数>");
             }
@@ -141,11 +132,7 @@ static void handle_irrigation_command(const char* command) {
         else if (strncmp(sub_command, "set week_min ", 13) == 0) {
             int min_times;
             if (sscanf(sub_command + 13, "%d", &min_times) == 1) {
-                if (irrigation_controller_set_week_min(min_times)) {
-                    ESP_LOGI(TAG, "周最小浇水次数设置为: %d", min_times);
-                } else {
-                    ESP_LOGI(TAG, "周最小浇水次数设置失败");
-                }
+                irrigation_controller_set_week_min(min_times);
             } else {
                 ESP_LOGI(TAG, "格式错误，正确格式: irrigation set week_min <次数>");
             }
@@ -154,11 +141,7 @@ static void handle_irrigation_command(const char* command) {
         else if (strncmp(sub_command, "set week_max ", 13) == 0) {
             int max_times;
             if (sscanf(sub_command + 13, "%d", &max_times) == 1) {
-                if (irrigation_controller_set_week_max(max_times)) {
-                    ESP_LOGI(TAG, "周最大浇水次数设置为: %d", max_times);
-                } else {
-                    ESP_LOGI(TAG, "周最大浇水次数设置失败");
-                }
+                irrigation_controller_set_week_max(max_times);
             } else {
                 ESP_LOGI(TAG, "格式错误，正确格式: irrigation set week_max <次数>");
             }
@@ -166,7 +149,6 @@ static void handle_irrigation_command(const char* command) {
         // 处理 irrigation manual trigger 命令
         else if (strcmp(sub_command, "manual trigger") == 0) {
             irrigation_controller_manual_trigger();
-            ESP_LOGI(TAG, "手动触发浇水");
         }
         // 处理 irrigation test mode on 命令
         else if (strcmp(sub_command, "test mode on") == 0) {
@@ -179,8 +161,7 @@ static void handle_irrigation_command(const char* command) {
         }
         // 处理 irrigation reset week 命令
         else if (strcmp(sub_command, "reset week") == 0) {
-            ESP_LOGI(TAG, "本周浇水次数已重置");
-            // 这里可以调用一个重置函数，目前由模块内部处理
+            irrigation_controller_reset_week();
         }
         // 处理 irrigation status 命令
         else if (strcmp(sub_command, "status") == 0) {
@@ -209,8 +190,6 @@ static void handle_irrigation_command(const char* command) {
         int moisture;
         if (sscanf(command + 9, "%d", &moisture) == 1) {
             irrigation_controller_set_moisture_sim(moisture);
-            ESP_LOGI(TAG, "设置模拟土壤湿度: %d%%", moisture);
-            ESP_LOGI(TAG, "开始模拟浇水测试...");
         } else {
             ESP_LOGI(TAG, "格式错误，正确格式: moisture <两位数字>");
             ESP_LOGI(TAG, "示例: moisture 45");

@@ -37,4 +37,7 @@ void irrigation_controller_manual_trigger(void);
 // 获取传感器启动信号状态
 bool irrigation_controller_get_sensor_power_status(void);
 
+// 重置本周浇水次数
+bool irrigation_controller_reset_week(void);
+
 #endif

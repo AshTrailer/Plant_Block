@@ -8,4 +8,5 @@ idf_component_register(
         ventilation_control
         time_manager
         light_control
+        irrigation_controller
 )

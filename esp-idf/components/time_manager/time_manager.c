@@ -10,12 +10,13 @@ static const char *TAG = "TIME_MGR";
 
 // 内部时间变量
 static system_time_t s_current_time = {
-    .year = 2026,
-    .month = 2,
-    .day = 9,
-    .hour = 8,
-    .minute = 25,
-    .second = 0
+    .year = 1970,
+    .month = 1,
+    .day = 1,
+    .hour = 0,
+    .minute = 0,
+    .second = 0,
+    .weekday = 4  // 1970年1月1日是星期四
 };
 
 // 互斥锁保护时间数据
@@ -27,6 +28,16 @@ static char s_time_string[64];
 // 时间更新任务句柄
 static TaskHandle_t s_time_task_handle = NULL;
 static bool s_time_task_running = false;
+
+// 星期字符串数组（中文）
+static const char* s_weekday_strings_cn[] = {
+    "星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"
+};
+
+// 星期字符串数组（英文缩写）
+static const char* s_weekday_strings_en[] = {
+    "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+};
 
 // 判断是否为闰年
 static bool is_leap_year(int year) {
@@ -75,6 +86,34 @@ static bool check_time_boundaries(int month, int hour, int minute, int second) {
     return true;
 }
 
+// 计算星期几的函数（Zeller's congruence算法）
+// 返回0=星期日，1=星期一，...，6=星期六
+static int calculate_weekday(int year, int month, int day) {
+    if (month < 3) {
+        month += 12;
+        year--;
+    }
+    
+    int century = year / 100;
+    int year_of_century = year % 100;
+    
+    // Zeller's congruence公式
+    int weekday = (day + (13 * (month + 1)) / 5 + year_of_century + 
+                   year_of_century / 4 + century / 4 - 2 * century) % 7;
+    
+    // 调整结果为0=星期日，1=星期一，...，6=星期六
+    return (weekday + 6) % 7;
+}
+
+// 更新星期几
+static void update_weekday(void) {
+    s_current_time.weekday = calculate_weekday(
+        s_current_time.year, 
+        s_current_time.month, 
+        s_current_time.day
+    );
+}
+
 // 时间递增任务（每秒更新一次）
 static void time_update_task(void *arg) {
     ESP_LOGI(TAG, "Time update task started");
@@ -101,6 +140,9 @@ static void time_update_task(void *arg) {
                         s_current_time.hour = 0;
                         s_current_time.day++;
                         
+                        // 日期变化，需要重新计算星期几
+                        update_weekday();
+                        
                         // 获取当前月份的实际天数
                         int days_in_current_month = get_days_in_month(
                             s_current_time.year, 
@@ -112,10 +154,16 @@ static void time_update_task(void *arg) {
                             s_current_time.day = 1;
                             s_current_time.month++;
                             
+                            // 月份变化，需要重新计算星期几
+                            update_weekday();
+                            
                             // 处理进位：月→年
                             if (s_current_time.month > 12) {
                                 s_current_time.month = 1;
                                 s_current_time.year++;
+                                
+                                // 年份变化，需要重新计算星期几
+                                update_weekday();
                             }
                         }
                     }
@@ -124,13 +172,14 @@ static void time_update_task(void *arg) {
             
             // 更新时间字符串
             snprintf(s_time_string, sizeof(s_time_string),
-                    "%04d/%02d/%02d %02d:%02d:%02d",
+                    "%04d/%02d/%02d %02d:%02d:%02d %s",
                     s_current_time.year,
                     s_current_time.month,
                     s_current_time.day,
                     s_current_time.hour,
                     s_current_time.minute,
-                    s_current_time.second);
+                    s_current_time.second,
+                    s_weekday_strings_cn[s_current_time.weekday]);
             
             xSemaphoreGive(s_time_mutex);
         }
@@ -145,17 +194,21 @@ void time_manager_init(void) {
         ESP_LOGE(TAG, "Failed to create time mutex");
         return;
     }
+
+    // 计算初始时间的星期几
+    update_weekday();
     
     // 初始化时间字符串
     snprintf(s_time_string, sizeof(s_time_string),
-            "%04d/%02d/%02d %02d:%02d:%02d",
+            "%04d/%02d/%02d %02d:%02d:%02d %s",
             s_current_time.year,
             s_current_time.month,
             s_current_time.day,
             s_current_time.hour,
             s_current_time.minute,
-            s_current_time.second);
-    
+            s_current_time.second,
+            s_weekday_strings_cn[s_current_time.weekday]);
+
     // 创建时间更新任务
     xTaskCreate(time_update_task,
                 "time_update_task",
@@ -200,11 +253,15 @@ bool time_manager_set_time(int year, int month, int day, int hour, int minute, i
         s_current_time.hour = hour;
         s_current_time.minute = minute;
         s_current_time.second = second;
+
+        // 更新星期几
+        update_weekday();
         
         // 更新时间字符串
         snprintf(s_time_string, sizeof(s_time_string),
-                "%04d/%02d/%02d %02d:%02d:%02d",
-                year, month, day, hour, minute, second);
+                "%04d/%02d/%02d %02d:%02d:%02d %s",
+                year, month, day, hour, minute, second,
+                s_weekday_strings_cn[s_current_time.weekday]);
         
         xSemaphoreGive(s_time_mutex);
         
@@ -236,4 +293,40 @@ const char* time_manager_get_time_string(void) {
 void time_manager_update_time(int year, int month, int day, int hour, int minute, int second) {
     // 直接调用设置函数，确保边界检查
     time_manager_set_time(year, month, day, hour, minute, second);
+}
+
+// 获取当前星期几（0=星期日，1=星期一，...，6=星期六）
+int time_manager_get_weekday(void) {
+    int weekday;
+    
+    if (xSemaphoreTake(s_time_mutex, portMAX_DELAY) == pdTRUE) {
+        weekday = s_current_time.weekday;
+        xSemaphoreGive(s_time_mutex);
+    } else {
+        weekday = -1; // 错误值
+    }
+    
+    return weekday;
+}
+
+// 获取星期几的字符串（中文）
+const char* time_manager_get_weekday_string(void) {
+    int weekday = time_manager_get_weekday();
+    
+    if (weekday >= 0 && weekday <= 6) {
+        return s_weekday_strings_cn[weekday];
+    }
+    
+    return "未知";
+}
+
+// 获取星期几的字符串（英文缩写）
+const char* time_manager_get_weekday_string_en(void) {
+    int weekday = time_manager_get_weekday();
+    
+    if (weekday >= 0 && weekday <= 6) {
+        return s_weekday_strings_en[weekday];
+    }
+    
+    return "Unknown";
 }

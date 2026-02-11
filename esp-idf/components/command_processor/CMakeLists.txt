@@ -4,4 +4,5 @@ idf_component_register(
     REQUIRES 
         light_control
         time_manager
+        irrigation_controller
 )

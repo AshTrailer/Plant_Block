@@ -8,6 +8,7 @@
 #include "gpio_control.h"
 #include "ventilation_control.h"
 #include "light_control.h"
+#include "irrigation_controller.h"
 
 void app_main(void) {
     ESP_LOGI("MAIN", "System starting, initializing components...");
@@ -26,11 +27,14 @@ void app_main(void) {
     command_processor_init();
 
     ESP_LOGI("MAIN", "Initializing Ventilation Control...");
-    ventilation_control_init(2);
+    ventilation_control_init(1);
     ventilation_control_start();
 
     ESP_LOGI("MAIN", "Initializing Light Control...");
-    light_control_init(25, 14);
+    light_control_init(9, 14);
+
+    ESP_LOGI("MAIN", "Initializing Irrigation Controller...");
+    irrigation_controller_init(15);
 
     ESP_LOGI("MAIN", "All components initialized.");
 
@@ -38,13 +42,12 @@ void app_main(void) {
         // 轮询输入
         input_parser_poll();
         light_control_poll();
+        irrigation_controller_poll();
 
         if (input_parser_frame_ready()) {
             const char* frame = input_parser_get_frame();
             if (frame != NULL) {
-
                 command_processor_process_frame(frame);
-
             }
         }
 
@@ -52,5 +55,4 @@ void app_main(void) {
         // 主循环延时
         vTaskDelay(50 / portTICK_PERIOD_MS);
     }
-          
 }

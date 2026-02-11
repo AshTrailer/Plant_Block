@@ -3,6 +3,7 @@
 #include "light_control.h"
 #include "time_manager.h"
 #include "ventilation_control.h" 
+#include "irrigation_controller.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -19,6 +20,7 @@ typedef struct {
 static module_info_t s_module_list[] = {
     {"fan", "通风控制", 1},      // 通风控制，GPIO1
     {"light", "补光灯控制", 15/14}, // 补光灯控制，GPIO15
+    {"pump", "浇水控制", 5},
 };
 
 static const int s_module_count = sizeof(s_module_list) / sizeof(s_module_list[0]);
@@ -31,6 +33,18 @@ static void print_command_help(void) {
     ESP_LOGI(TAG, "--- 系统命令 ---");
     ESP_LOGI(TAG, "help               - 显示此帮助");
     ESP_LOGI(TAG, "module list        - 列出所有控制模块");
+    
+    // 浇水控制部分
+    ESP_LOGI(TAG, "--- 浇水控制 ---");
+    ESP_LOGI(TAG, "moisture <XX>      - 设置模拟土壤湿度并测试");
+    ESP_LOGI(TAG, "irrigation set threshold <0-100> - 设置触发阈值");
+    ESP_LOGI(TAG, "irrigation set duration <秒>   - 设置单次浇水时长");
+    ESP_LOGI(TAG, "irrigation set week_min <次数> - 设置周最小浇水次数");
+    ESP_LOGI(TAG, "irrigation set week_max <次数> - 设置周最大浇水次数");
+    ESP_LOGI(TAG, "irrigation manual trigger      - 手动触发浇水");
+    ESP_LOGI(TAG, "irrigation test mode on/off    - 开启/关闭测试模式");
+    ESP_LOGI(TAG, "irrigation reset week          - 重置本周浇水次数");
+    ESP_LOGI(TAG, "irrigation status              - 显示浇水状态");
     
     // 补光灯控制部分
     ESP_LOGI(TAG, "--- 补光灯控制 ---");
@@ -50,6 +64,7 @@ static void print_command_help(void) {
     
     // 示例部分
     ESP_LOGI(TAG, "--- 示例 ---");
+    ESP_LOGI(TAG, "浇水: moisture 45, irrigation set threshold 60");
     ESP_LOGI(TAG, "补光灯: light set start 08:30, light auto");
     ESP_LOGI(TAG, "时间: time set 2025/02/05 14:30:00");
     ESP_LOGI(TAG, "=========================");
@@ -58,13 +73,13 @@ static void print_command_help(void) {
 // 处理模块列表命令
 static void handle_module_list(void) {
     ESP_LOGI(TAG, "=== 模块列表 ===");
-    ESP_LOGI(TAG, "模块     状态     引脚");
-    ESP_LOGI(TAG, "------   -------  --------");
+    ESP_LOGI(TAG, "模块        状态     引脚");
+    ESP_LOGI(TAG, "---------   -------  --------");
     
     // 通风控制模块（fan）
     bool fan_state = ventilation_control_get_state();
     int fan_pin = ventilation_control_get_pin();
-    ESP_LOGI(TAG, "%-8s %-8s  GPIO%d",
+    ESP_LOGI(TAG, "%-12s %-8s  GPIO%d",
              "fan",
              fan_state ? "ON" : "OFF",
              fan_pin);
@@ -73,12 +88,137 @@ static void handle_module_list(void) {
     bool light_state = light_control_is_on();
     int light_pin = light_control_get_pin();
     int pwm_pin = light_control_get_pwm_pin();
-    ESP_LOGI(TAG, "%-8s %-8s  GPIO%d/GPIO%d",
+    ESP_LOGI(TAG, "%-12s %-8s  GPIO%d/GPIO%d",
              "light",
              light_state ? "ON" : "OFF",
              light_pin, pwm_pin);
     
+    // 浇水控制模块（irrigation）
+    int irrigation_pin = 15;  // GPIO15
+    bool sensor_power = irrigation_controller_get_sensor_power_status();
+    ESP_LOGI(TAG, "%-12s %-8s  GPIO%d",
+             "irrigation",
+             sensor_power ? "SENSOR" : "IDLE",
+             irrigation_pin);
+    
     ESP_LOGI(TAG, "===================");
+}
+
+// 处理浇水控制命令
+// 处理浇水控制命令
+static void handle_irrigation_command(const char* command) {
+    // 检查是否为带"irrigation "前缀的命令
+    if (strncmp(command, "irrigation ", 11) == 0) {
+        const char* sub_command = command + 11;
+        
+        // 处理 irrigation set threshold 命令
+        if (strncmp(sub_command, "set threshold ", 14) == 0) {
+            int threshold;
+            if (sscanf(sub_command + 14, "%d", &threshold) == 1) {
+                if (irrigation_controller_set_threshold(threshold)) {
+                    ESP_LOGI(TAG, "触发阈值设置为: %d%%", threshold);
+                } else {
+                    ESP_LOGI(TAG, "阈值设置失败");
+                }
+            } else {
+                ESP_LOGI(TAG, "格式错误，正确格式: irrigation set threshold <0-100>");
+            }
+        }
+        // 处理 irrigation set duration 命令
+        else if (strncmp(sub_command, "set duration ", 13) == 0) {
+            float duration;
+            if (sscanf(sub_command + 13, "%f", &duration) == 1) {
+                if (irrigation_controller_set_duration(duration)) {
+                    ESP_LOGI(TAG, "单次浇水时长设置为: %.1f秒", duration);
+                } else {
+                    ESP_LOGI(TAG, "浇水时长设置失败");
+                }
+            } else {
+                ESP_LOGI(TAG, "格式错误，正确格式: irrigation set duration <秒数>");
+            }
+        }
+        // 处理 irrigation set week_min 命令
+        else if (strncmp(sub_command, "set week_min ", 13) == 0) {
+            int min_times;
+            if (sscanf(sub_command + 13, "%d", &min_times) == 1) {
+                if (irrigation_controller_set_week_min(min_times)) {
+                    ESP_LOGI(TAG, "周最小浇水次数设置为: %d", min_times);
+                } else {
+                    ESP_LOGI(TAG, "周最小浇水次数设置失败");
+                }
+            } else {
+                ESP_LOGI(TAG, "格式错误，正确格式: irrigation set week_min <次数>");
+            }
+        }
+        // 处理 irrigation set week_max 命令
+        else if (strncmp(sub_command, "set week_max ", 13) == 0) {
+            int max_times;
+            if (sscanf(sub_command + 13, "%d", &max_times) == 1) {
+                if (irrigation_controller_set_week_max(max_times)) {
+                    ESP_LOGI(TAG, "周最大浇水次数设置为: %d", max_times);
+                } else {
+                    ESP_LOGI(TAG, "周最大浇水次数设置失败");
+                }
+            } else {
+                ESP_LOGI(TAG, "格式错误，正确格式: irrigation set week_max <次数>");
+            }
+        }
+        // 处理 irrigation manual trigger 命令
+        else if (strcmp(sub_command, "manual trigger") == 0) {
+            irrigation_controller_manual_trigger();
+            ESP_LOGI(TAG, "手动触发浇水");
+        }
+        // 处理 irrigation test mode on 命令
+        else if (strcmp(sub_command, "test mode on") == 0) {
+            ESP_LOGI(TAG, "测试模式已开启，跳过4小时限制");
+            // 注意：test_mode现在在irrigation_controller内部管理
+        }
+        // 处理 irrigation test mode off 命令
+        else if (strcmp(sub_command, "test mode off") == 0) {
+            ESP_LOGI(TAG, "测试模式已关闭");
+        }
+        // 处理 irrigation reset week 命令
+        else if (strcmp(sub_command, "reset week") == 0) {
+            ESP_LOGI(TAG, "本周浇水次数已重置");
+            // 这里可以调用一个重置函数，目前由模块内部处理
+        }
+        // 处理 irrigation status 命令
+        else if (strcmp(sub_command, "status") == 0) {
+            int threshold = irrigation_controller_get_threshold();
+            float duration = irrigation_controller_get_duration();
+            int week_min = irrigation_controller_get_week_min();
+            int week_max = irrigation_controller_get_week_max();
+            int week_count = irrigation_controller_get_week_count();
+            
+            ESP_LOGI(TAG, "=== 浇水控制状态 ===");
+            ESP_LOGI(TAG, "触发阈值: %d%%", threshold);
+            ESP_LOGI(TAG, "单次浇水时长: %.1f秒", duration);
+            ESP_LOGI(TAG, "周最小浇水次数: %d", week_min);
+            ESP_LOGI(TAG, "周最大浇水次数: %d", week_max);
+            ESP_LOGI(TAG, "本周已浇水次数: %d/%d", week_count, week_max);
+            ESP_LOGI(TAG, "传感器电源状态: %s", 
+                    irrigation_controller_get_sensor_power_status() ? "开启" : "关闭");
+            ESP_LOGI(TAG, "================");
+        }
+        else {
+            ESP_LOGI(TAG, "未知的浇水控制命令，输入 'help' 查看帮助");
+        }
+    }
+    // 处理 moisture 命令（独立命令，不加 irrigation 前缀）
+    else if (strncmp(command, "moisture ", 9) == 0) {
+        int moisture;
+        if (sscanf(command + 9, "%d", &moisture) == 1) {
+            irrigation_controller_set_moisture_sim(moisture);
+            ESP_LOGI(TAG, "设置模拟土壤湿度: %d%%", moisture);
+            ESP_LOGI(TAG, "开始模拟浇水测试...");
+        } else {
+            ESP_LOGI(TAG, "格式错误，正确格式: moisture <两位数字>");
+            ESP_LOGI(TAG, "示例: moisture 45");
+        }
+    }
+    else {
+        ESP_LOGI(TAG, "未知的浇水命令，输入 'help' 查看帮助");
+    }
 }
 
 // 处理补光灯命令
@@ -219,6 +359,12 @@ void command_processor_process_frame(const char* frame) {
     // --- 处理时间命令 ---
     if (strncmp(frame, "time", 4) == 0) {
         handle_time_command(frame);
+        return;
+    }
+
+    // --- 处理浇水控制命令 ---
+    if (strncmp(frame, "irrigation", 10) == 0 || strncmp(frame, "moisture", 8) == 0) {
+        handle_irrigation_command(frame);
         return;
     }
 

@@ -9,4 +9,5 @@ idf_component_register(
         time_manager
         light_control
         irrigation_controller
+        moisture_sensor
 )

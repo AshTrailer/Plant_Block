@@ -9,6 +9,7 @@
 #include "ventilation_control.h"
 #include "light_control.h"
 #include "irrigation_controller.h"
+#include "moisture_sensor.h"
 
 void app_main(void) {
     ESP_LOGI("MAIN", "System starting, initializing components...");
@@ -26,6 +27,9 @@ void app_main(void) {
     ESP_LOGI("MAIN", "Initializing Command Processor...");
     command_processor_init();
 
+    ESP_LOGI("MAIN", "Initializing Moisture Sensor...");
+    moisture_sensor_init(15, 2);   // 电源 GPIO15，ADC GPIO2
+
     ESP_LOGI("MAIN", "Initializing Ventilation Control...");
     ventilation_control_init(1);
     ventilation_control_start();
@@ -34,7 +38,7 @@ void app_main(void) {
     light_control_init(9, 14);
 
     ESP_LOGI("MAIN", "Initializing Irrigation Controller...");
-    irrigation_controller_init(15);
+    irrigation_controller_init(18);
 
     ESP_LOGI("MAIN", "All components initialized.");
 

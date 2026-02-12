@@ -4,6 +4,7 @@
 #include "time_manager.h"
 #include "ventilation_control.h" 
 #include "irrigation_controller.h"
+#include "moisture_sensor.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -36,7 +37,6 @@ static void print_command_help(void) {
     
     // 浇水控制部分
     ESP_LOGI(TAG, "--- 浇水控制 ---");
-    ESP_LOGI(TAG, "moisture <XX>      - 设置模拟土壤湿度并测试");
     ESP_LOGI(TAG, "irrigation set threshold <0-100> - 设置触发阈值");
     ESP_LOGI(TAG, "irrigation set duration <秒>   - 设置单次浇水时长");
     ESP_LOGI(TAG, "irrigation set week_min <次数> - 设置周最小浇水次数");
@@ -61,6 +61,14 @@ static void print_command_help(void) {
     ESP_LOGI(TAG, "time                  - 显示当前时间");
     ESP_LOGI(TAG, "time get              - 显示当前时间");
     ESP_LOGI(TAG, "time set Y/M/D H:M:S  - 设置系统时间");
+
+    // 土壤湿度传感器部分
+    ESP_LOGI(TAG, "--- 土壤湿度传感器 ---");
+    ESP_LOGI(TAG, "moisture on            - 打开传感器电源(GPIO15)");
+    ESP_LOGI(TAG, "moisture off           - 关闭传感器电源");
+    ESP_LOGI(TAG, "moisture read          - 开始连续采集(每秒打印电压)");
+    ESP_LOGI(TAG, "moisture stop          - 停止连续采集");
+    ESP_LOGI(TAG, "moisture <XX>          - 设置模拟湿度值(用于浇水测试)");
     
     // 示例部分
     ESP_LOGI(TAG, "--- 示例 ---");
@@ -102,6 +110,37 @@ static void handle_module_list(void) {
              irrigation_pin);
     
     ESP_LOGI(TAG, "===================");
+}
+
+// 处理土壤湿度传感器命令
+static void handle_moisture_command(const char* command) {
+    // 命令格式：moisture <参数>
+    const char* sub = command + 9;  // 跳过 "moisture "
+
+    // ---- 传感器电源控制 ----
+    if (strcmp(sub, "on") == 0) {
+        moisture_sensor_power_on();
+    }
+    else if (strcmp(sub, "off") == 0) {
+        moisture_sensor_power_off();
+    }
+    // ---- 连续读取控制 ----
+    else if (strcmp(sub, "read") == 0) {
+        moisture_sensor_start_reading();
+    }
+    else if (strcmp(sub, "stop") == 0) {
+        moisture_sensor_stop_reading();
+    }
+    // ---- 原有的模拟湿度设置（用于浇水测试）----
+    else {
+        int moisture;
+        if (sscanf(sub, "%d", &moisture) == 1) {
+            irrigation_controller_set_moisture_sim(moisture);
+        } else {
+            ESP_LOGI(TAG, "格式错误，正确格式: moisture <两位数字> 或 moisture on/off/read/stop");
+            ESP_LOGI(TAG, "示例: moisture 45, moisture on, moisture read");
+        }
+    }
 }
 
 // 处理浇水控制命令
@@ -183,16 +222,6 @@ static void handle_irrigation_command(const char* command) {
         }
         else {
             ESP_LOGI(TAG, "未知的浇水控制命令，输入 'help' 查看帮助");
-        }
-    }
-    // 处理 moisture 命令（独立命令，不加 irrigation 前缀）
-    else if (strncmp(command, "moisture ", 9) == 0) {
-        int moisture;
-        if (sscanf(command + 9, "%d", &moisture) == 1) {
-            irrigation_controller_set_moisture_sim(moisture);
-        } else {
-            ESP_LOGI(TAG, "格式错误，正确格式: moisture <两位数字>");
-            ESP_LOGI(TAG, "示例: moisture 45");
         }
     }
     else {
@@ -343,8 +372,14 @@ void command_processor_process_frame(const char* frame) {
     }
 
     // --- 处理浇水控制命令 ---
-    if (strncmp(frame, "irrigation", 10) == 0 || strncmp(frame, "moisture", 8) == 0) {
+    if (strncmp(frame, "irrigation", 10) == 0) {
         handle_irrigation_command(frame);
+        return;
+    }
+
+    // 土壤湿度传感器命令（moisture 前缀）
+    if (strncmp(frame, "moisture", 8) == 0) {
+        handle_moisture_command(frame);
         return;
     }
 

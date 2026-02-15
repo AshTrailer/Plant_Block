@@ -4,6 +4,8 @@
 #include "freertos/task.h"
 #include "time_manager.h"
 #include "gpio_control.h"
+#include "moisture_sensor.h"
+#include "data_processor.h"
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
@@ -27,7 +29,6 @@ typedef struct {
     int week_water_count;   // 本周已浇水次数
     time_t last_water_time; // 上次浇水时间（Unix时间戳）
     time_t last_check_time; // 上次检查时间（Unix时间戳）
-    int sim_moisture;       // 模拟土壤湿度值（测试用）
     bool test_mode;         // 测试模式（跳过4小时限制）
     bool time_reset_needed; // 时间重置标志
     bool force_check_needed;
@@ -48,15 +49,15 @@ static irrigation_state_t s_state = {
     .week_water_count = 0,
     .last_water_time = 0,
     .last_check_time = 0,
-    .sim_moisture = 0,
     .test_mode = false,
     .time_reset_needed = false,
     .force_check_needed = false,
 };
 
-
 static TickType_t s_last_poll_ticks = 0;
 static const TickType_t s_poll_interval_ticks = 1000 / portTICK_PERIOD_MS; // 1秒
+
+#define SAMPLE_STABILITY_THRESHOLD 1.0f   // 1.0%
 
 // 任务函数声明
 static void watering_task(void *arg);
@@ -86,20 +87,16 @@ static bool is_new_week(void) {
     return false;
 }
 
-// 启动传感器电源
+// 启动传感器电源（调用moisture_sensor模块）
 static void start_sensor_power(void) {
+    moisture_sensor_power_on();
     s_state.sensor_power = true;
-    ESP_LOGI(TAG, "传感器电源已开启");
-    // 这里可以添加实际的GPIO控制代码
-    // gpio_control_set_level(sensor_power_pin, true);
 }
 
-// 关闭传感器电源
+// 关闭传感器电源（调用moisture_sensor模块）
 static void stop_sensor_power(void) {
+    moisture_sensor_power_off();
     s_state.sensor_power = false;
-    ESP_LOGI(TAG, "传感器电源已关闭");
-    // 这里可以添加实际的GPIO控制代码
-    // gpio_control_set_level(sensor_power_pin, false);
 }
 
 // 检查是否需要浇水（核心逻辑）
@@ -167,6 +164,60 @@ static void check_time_reset(void) {
     }
 }
 
+// 采样并获取稳定的湿度值
+static bool sample_stable_humidity(float *humidity_avg, int max_retry) {
+    const int SAMPLE_COUNT = 5;
+    int humidity_samples[SAMPLE_COUNT];
+    int valid_samples[SAMPLE_COUNT];
+    
+    for (int attempt = 1; attempt <= max_retry; attempt++) {
+        ESP_LOGI(TAG, "湿度采样 尝试 %d/%d: 采集 %d 个样本 (间隔1秒)...", 
+                 attempt, max_retry, SAMPLE_COUNT);
+        
+        // 采集样本
+        for (int i = 0; i < SAMPLE_COUNT; i++) {
+            humidity_samples[i] = (int)moisture_sensor_get_humidity_percent();
+            ESP_LOGI(TAG, "样本 %d: %d%%", i+1, humidity_samples[i]);
+            if (i < SAMPLE_COUNT - 1) {
+                vTaskDelay(1000 / portTICK_PERIOD_MS);
+            }
+        }
+        
+        // 去除最大最小值
+        int valid_count = data_processor_remove_outliers(humidity_samples, SAMPLE_COUNT, 
+                                                          valid_samples, 3);
+        if (valid_count < 3) {
+            ESP_LOGW(TAG, "尝试 %d: 有效样本不足3个", attempt);
+            goto retry_delay;
+        }
+        
+        // 计算平均值和标准差百分比
+        float mean = data_processor_mean(valid_samples, valid_count);
+        float stddev = data_processor_stddev(valid_samples, valid_count);
+        float stddev_percent = (stddev / mean) * 100.0f;
+        ESP_LOGI(TAG, "采样结果: 平均值=%.1f%%, 标准差=%.2f (%.2f%%)", mean, stddev, stddev_percent);
+        
+        // 检查稳定性
+        if (stddev_percent <= SAMPLE_STABILITY_THRESHOLD) {
+            *humidity_avg = mean;
+            ESP_LOGI(TAG, "采样稳定，湿度=%.1f%%", mean);
+            return true;
+        } else {
+            ESP_LOGW(TAG, "尝试 %d: 标准差 %.2f%% 超过阈值 %.2f%%", 
+                     attempt, stddev_percent, SAMPLE_STABILITY_THRESHOLD);
+        }
+        
+    retry_delay:
+        if (attempt < max_retry) {
+            ESP_LOGI(TAG, "2秒后重试...");
+            vTaskDelay(2000 / portTICK_PERIOD_MS);
+        }
+    }
+    
+    ESP_LOGE(TAG, "采样失败：连续 %d 次尝试均不稳定", max_retry);
+    return false;
+}
+
 // 浇水任务函数
 static void watering_task(void *arg) {
     float duration = *(float *)arg;
@@ -223,6 +274,32 @@ static void makeup_watering_task(void *arg) {
     vTaskDelete(NULL);
 }
 
+// 传感器检查任务函数（实际采样与浇水判断）
+static void sensor_check_task(void *arg) {
+    // 等待传感器稳定（2秒）
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
+    
+    // 采样湿度（最多重试3次）
+    float humidity = 0;
+    bool stable = sample_stable_humidity(&humidity, 3);
+    
+    if (stable) {
+        // 判断是否浇水
+        if (should_water_now((int)humidity)) {
+            start_watering();
+        } else {
+            ESP_LOGI(TAG, "当前湿度 %.1f%%，无需浇水", humidity);
+        }
+    } else {
+        ESP_LOGE(TAG, "湿度采样不稳定，放弃本次浇水判断");
+    }
+    
+    // 关闭传感器电源
+    stop_sensor_power();
+    
+    vTaskDelete(NULL);
+}
+
 // 处理周最小浇水次数逻辑
 static void handle_week_minimum_watering(void) {
     if (is_new_week()) {
@@ -260,29 +337,9 @@ static void handle_week_minimum_watering(void) {
     }
 }
 
-// 传感器检查任务函数
-static void sensor_check_task(void *arg) {
-    vTaskDelay(2000 / portTICK_PERIOD_MS);
-    
-    // 这里应该读取实际传感器值
-    // 目前使用模拟值
-    int moisture = s_state.sim_moisture;
-    
-    ESP_LOGI(TAG, "读取土壤湿度: %d%%", moisture);
-    
-    if (should_water_now(moisture)) {
-        start_watering();
-    }
-    
-    // 关闭传感器电源
-    stop_sensor_power();
-    
-    vTaskDelete(NULL);
-}
-
 // 每4小时检查一次是否需要浇水
 static void check_watering_schedule(void) {
-    time_t now = time_manager_get_unix_time();  // 使用time_manager的Unix时间戳
+    time_t now = time_manager_get_unix_time();
     
     // 每4小时检查一次（14400秒）
     if (difftime(now, s_state.last_check_time) >= 14400.0) {
@@ -290,14 +347,14 @@ static void check_watering_schedule(void) {
         
         ESP_LOGI(TAG, "4小时检查点，准备检查土壤湿度");
         
-        // 提前2秒启动传感器
+        // 启动传感器电源
         start_sensor_power();
         
-        // 2秒后检查湿度
+        // 2秒后开始采样（已在任务中延迟），创建传感器检查任务
         xTaskCreate(
             sensor_check_task,
             "sensor_check_task",
-            2048,
+            4096,          // 堆栈稍大，因为包含采样和数据处理
             NULL,
             2,
             NULL
@@ -334,14 +391,14 @@ void irrigation_controller_poll(void) {
             // 处理周最小浇水逻辑
             handle_week_minimum_watering();
 
-            // ===== 强制检查（时间重置后立即触发一次）=====
+            // 强制检查（时间重置后立即触发一次）
             if (s_state.force_check_needed) {
                 ESP_LOGI(TAG, "强制浇水检查（时间重置后）");
                 start_sensor_power();
                 xTaskCreate(
                     sensor_check_task,
                     "sensor_check_task",
-                    2048,
+                    4096,
                     NULL,
                     2,
                     NULL
@@ -352,7 +409,7 @@ void irrigation_controller_poll(void) {
                 // 避免紧接着的4小时检查立即触发
                 s_state.last_check_time = time_manager_get_unix_time();
             } 
-            // ===== 正常4小时周期检查 =====
+            // 正常4小时周期检查
             else {
                 check_watering_schedule();
             }
@@ -360,15 +417,6 @@ void irrigation_controller_poll(void) {
         
         s_last_poll_ticks = current_ticks;
     }
-}
-
-// 模拟土壤湿度输入（用于测试）
-void irrigation_controller_set_moisture_sim(int moisture) {
-    if (moisture < 0) moisture = 0;
-    if (moisture > 100) moisture = 100;
-    
-    s_state.sim_moisture = moisture;
-    ESP_LOGI(TAG, "设置模拟土壤湿度: %d%%", moisture);
 }
 
 // 设置触发阈值
@@ -448,19 +496,6 @@ int irrigation_controller_get_week_max(void) {
 
 int irrigation_controller_get_week_count(void) {
     return s_state.week_water_count;
-}
-
-// 手动触发浇水（测试用）
-void irrigation_controller_manual_trigger(void) {
-    ESP_LOGI(TAG, "手动触发浇水");
-    s_state.test_mode = true;
-    
-    // 模拟低湿度触发
-    if (should_water_now(30)) {
-        start_watering();
-    }
-    
-    s_state.test_mode = false;
 }
 
 // 获取传感器启动信号状态

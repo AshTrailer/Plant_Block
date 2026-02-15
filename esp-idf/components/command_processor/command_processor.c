@@ -64,13 +64,9 @@ static void print_command_help(void) {
 
     // 土壤湿度传感器部分
     ESP_LOGI(TAG, "--- 土壤湿度传感器 ---");
-    ESP_LOGI(TAG, "moisture on            - 打开传感器电源(GPIO15)");
-    ESP_LOGI(TAG, "moisture off           - 关闭传感器电源");
-    ESP_LOGI(TAG, "moisture read          - 开始连续采集(每秒打印电压)");
-    ESP_LOGI(TAG, "moisture stop          - 停止连续采集");
-    ESP_LOGI(TAG, "moisture <XX>          - 设置模拟湿度值(用于浇水测试)");
-    ESP_LOGI(TAG, "moisture cal dry        - 执行干燥校准");
-    ESP_LOGI(TAG, "moisture cal wet        - 执行湿润校准");
+    ESP_LOGI(TAG, "moisture on/off           - 开关传感器电源");
+    ESP_LOGI(TAG, "moisture read/stop        - 开始/停止连续采集");
+    ESP_LOGI(TAG, "moisture cal dry/wet      - 执行干燥/湿润校准");
     
     // 示例部分
     ESP_LOGI(TAG, "--- 示例 ---");
@@ -141,13 +137,8 @@ static void handle_moisture_command(const char* command) {
     }
     // ---- 原有的模拟湿度设置（用于浇水测试）----
     else {
-        int moisture;
-        if (sscanf(sub, "%d", &moisture) == 1) {
-            irrigation_controller_set_moisture_sim(moisture);
-        } else {
-            ESP_LOGI(TAG, "格式错误，正确格式: moisture <两位数字> 或 moisture on/off/read/stop");
-            ESP_LOGI(TAG, "示例: moisture 45, moisture on, moisture read");
-        }
+        ESP_LOGI(TAG, "格式错误，正确格式: moisture <两位数字> 或 moisture on/off/read/stop");
+        ESP_LOGI(TAG, "示例: moisture 45, moisture on, moisture read");
     }
 }
 
@@ -192,10 +183,6 @@ static void handle_irrigation_command(const char* command) {
             } else {
                 ESP_LOGI(TAG, "格式错误，正确格式: irrigation set week_max <次数>");
             }
-        }
-        // 处理 irrigation manual trigger 命令
-        else if (strcmp(sub_command, "manual trigger") == 0) {
-            irrigation_controller_manual_trigger();
         }
         // 处理 irrigation test mode on 命令
         else if (strcmp(sub_command, "test mode on") == 0) {

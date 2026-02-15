@@ -5,4 +5,5 @@ idf_component_register(
         gpio_control 
         driver
         esp_adc
+        data_processor
 )

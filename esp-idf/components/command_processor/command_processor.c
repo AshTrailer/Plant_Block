@@ -69,6 +69,8 @@ static void print_command_help(void) {
     ESP_LOGI(TAG, "moisture read          - 开始连续采集(每秒打印电压)");
     ESP_LOGI(TAG, "moisture stop          - 停止连续采集");
     ESP_LOGI(TAG, "moisture <XX>          - 设置模拟湿度值(用于浇水测试)");
+    ESP_LOGI(TAG, "moisture cal dry        - 执行干燥校准");
+    ESP_LOGI(TAG, "moisture cal wet        - 执行湿润校准");
     
     // 示例部分
     ESP_LOGI(TAG, "--- 示例 ---");
@@ -130,6 +132,12 @@ static void handle_moisture_command(const char* command) {
     }
     else if (strcmp(sub, "stop") == 0) {
         moisture_sensor_stop_reading();
+    }
+    else if (strcmp(sub, "cal dry") == 0) {
+        moisture_sensor_cal_dry();
+    }
+    else if (strcmp(sub, "cal wet") == 0) {
+        moisture_sensor_cal_wet();
     }
     // ---- 原有的模拟湿度设置（用于浇水测试）----
     else {

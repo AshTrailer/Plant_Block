@@ -4,86 +4,175 @@
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 #include "gpio_control.h"
+#include "data_processor.h"
 #include <string.h>
+#include <math.h>
 
 static const char *TAG = "MOISTURE_SENSOR";
 
 // 硬件配置
-static int s_power_pin = 15;        // 默认GPIO15
-static int s_adc_pin = 2;          // 默认GPIO2
+static int s_power_pin = 15;
+static int s_adc_pin = 2;
 static adc_oneshot_unit_handle_t s_adc_handle = NULL;
+static adc_cali_handle_t s_adc_cali_handle = NULL;
 static TaskHandle_t s_read_task_handle = NULL;
 static bool s_is_powered = false;
 
-// ADC 初始化
+// 校准数据
+static bool s_dry_calibrated = false;
+static bool s_wet_calibrated = false;
+static float s_raw_dry = 0;      // 干燥时原始ADC平均值
+static float s_raw_wet = 0;      // 湿润时原始ADC平均值
+static float s_volt_efuse_dry = 0; // 干燥时eFuse校准电压平均值
+static float s_volt_efuse_wet = 0; // 湿润时eFuse校准电压平均值
+
+// 目标电压（根据示波器实测）
+#define TARGET_VOLT_DRY 2079.0f   // 2.079V = 2079 mV
+#define TARGET_VOLT_WET 970.0f    // 970 mV
+
+// 线性拟合系数（用于将eFuse电压映射到目标电压）
+static float s_k = 1.0f;
+static float s_b = 0.0f;
+
+// 稳定性阈值
+#define DRY_STABILITY_THRESHOLD 0.5f   // 干燥校准阈值 0.5%
+#define WET_STABILITY_THRESHOLD 1.0f   // 湿润校准阈值 1.0% (放宽)
+
+// 采样配置
+#define SAMPLE_COUNT 10
+#define MAX_RETRY 3
+
+// ADC 校准初始化（eFuse）
+static bool adc_calibration_init(void) {
+    esp_err_t ret;
+    adc_cali_handle_t cali_handle = NULL;
+    bool calibrated = false;
+
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    adc_cali_curve_fitting_config_t cali_cfg = {
+        .unit_id = ADC_UNIT_1,
+        .chan = ADC_CHANNEL_2,
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+    ret = adc_cali_create_scheme_curve_fitting(&cali_cfg, &cali_handle);
+    if (ret == ESP_OK) calibrated = true;
+#elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    adc_cali_line_fitting_config_t cali_cfg = {
+        .unit_id = ADC_UNIT_1,
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
+    };
+    ret = adc_cali_create_scheme_line_fitting(&cali_cfg, &cali_handle);
+    if (ret == ESP_OK) calibrated = true;
+#endif
+
+    s_adc_cali_handle = cali_handle;
+    if (!calibrated) {
+        ESP_LOGW(TAG, "eFuse calibration failed - fallback to raw * 3300 / 4095");
+    }
+    return calibrated;
+}
+
+// ADC 硬件初始化
 static void adc_init(void) {
-    // 配置ADC单次转换单元
     adc_oneshot_unit_init_cfg_t init_cfg = {
-        .unit_id = ADC_UNIT_1,      // 使用ADC1
+        .unit_id = ADC_UNIT_1,
         .ulp_mode = ADC_ULP_MODE_DISABLE,
     };
     ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_cfg, &s_adc_handle));
 
-    // 配置ADC通道（GPIO18对应ADC1_CH0？实际请查阅数据手册）
-    // 此处假定GPIO18为ADC1_CH0，用户需根据实际硬件修改
     adc_oneshot_chan_cfg_t chan_cfg = {
-        .atten = ADC_ATTEN_DB_12,   // 0~3.3V
-        .bitwidth = ADC_BITWIDTH_12, // 12位分辨率
+        .atten = ADC_ATTEN_DB_12,
+        .bitwidth = ADC_BITWIDTH_12,
     };
     ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, ADC_CHANNEL_2, &chan_cfg));
-    ESP_LOGI(TAG, "ADC initialized on GPIO%d", s_adc_pin);
+    ESP_LOGI(TAG, "ADC configured: GPIO%d (ADC1_CH2), 12-bit, 0-3.3V", s_adc_pin);
+
+    adc_calibration_init();
 }
 
-// 读取ADC原始值（0-4095）
+// 读取原始ADC值
 static uint32_t adc_read_raw(void) {
     int raw = 0;
     ESP_ERROR_CHECK(adc_oneshot_read(s_adc_handle, ADC_CHANNEL_2, &raw));
     return (uint32_t)raw;
 }
 
-// 将原始值转换为电压（mV）
-static uint32_t adc_raw_to_mv(uint32_t raw) {
-    // 12位ADC，参考电压3.3V
-    return (raw * 3300) / 4095;
+// 读取eFuse校准后的电压（mV）
+static uint32_t adc_read_voltage_efuse(void) {
+    int raw = 0;
+    ESP_ERROR_CHECK(adc_oneshot_read(s_adc_handle, ADC_CHANNEL_2, &raw));
+    int voltage_mv = 0;
+    if (s_adc_cali_handle != NULL) {
+        esp_err_t ret = adc_cali_raw_to_voltage(s_adc_cali_handle, raw, &voltage_mv);
+        if (ret != ESP_OK) {
+            voltage_mv = (raw * 3300) / 4095;
+        }
+    } else {
+        voltage_mv = (raw * 3300) / 4095;
+    }
+    return (uint32_t)voltage_mv;
+}
+
+// 应用二次校准：将eFuse电压映射到目标电压
+static uint32_t apply_secondary_calibration(uint32_t volt_efuse) {
+    if (!s_dry_calibrated || !s_wet_calibrated) {
+        return volt_efuse; // 未完成双校准时返回原始eFuse电压
+    }
+    // 线性映射
+    float calibrated = s_k * volt_efuse + s_b;
+    return (uint32_t)calibrated;
+}
+
+// 计算湿度百分比（干燥=100%，湿润=0%）
+static float calculate_humidity_percent(uint32_t volt_calibrated) {
+    if (!s_dry_calibrated || !s_wet_calibrated) {
+        return 0.0f;
+    }
+    float range = TARGET_VOLT_DRY - TARGET_VOLT_WET;
+    if (range <= 0) return 0.0f;
+    float hum = (TARGET_VOLT_DRY - volt_calibrated) / range * 100.0f;
+    if (hum < 0) hum = 0;
+    if (hum > 100) hum = 100;
+    return hum;
 }
 
 // 连续采集任务
 static void sensor_read_task(void *arg) {
     ESP_LOGI(TAG, "Sensor reading task started, waiting 2s for sensor stabilization...");
-    vTaskDelay(2000 / portTICK_PERIOD_MS);  // 上电后稳定2秒
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
 
     while (1) {
         if (!s_is_powered) {
             ESP_LOGI(TAG, "Sensor power off, stop reading");
             break;
         }
+        // 读取eFuse电压
+        uint32_t volt_efuse = adc_read_voltage_efuse();
+        // 应用二次校准
+        uint32_t volt_cal = apply_secondary_calibration(volt_efuse);
+        float hum = calculate_humidity_percent(volt_cal);
 
-        // 读取ADC并打印电压
-        uint32_t raw = adc_read_raw();
-        uint32_t mv = adc_raw_to_mv(raw);
-        ESP_LOGI(TAG, "Moisture sensor raw: %u, voltage: %u mV", raw, mv);
-
-        vTaskDelay(1000 / portTICK_PERIOD_MS); // 每秒采集一次
+        ESP_LOGI(TAG, "Voltage: %lu mV, Humidity: %.1f%%", volt_cal, hum);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
-
     s_read_task_handle = NULL;
     vTaskDelete(NULL);
 }
 
-// 初始化模块
+// 初始化
 void moisture_sensor_init(int power_pin, int adc_pin) {
     s_power_pin = power_pin;
     s_adc_pin = adc_pin;
-
-    // ADC初始化
     adc_init();
-
     ESP_LOGI(TAG, "Moisture sensor module initialized");
     ESP_LOGI(TAG, "Power pin: GPIO%d, ADC pin: GPIO%d", s_power_pin, s_adc_pin);
 }
 
-// 打开传感器电源
 void moisture_sensor_power_on(void) {
     if (s_is_powered) {
         ESP_LOGW(TAG, "Sensor already powered on");
@@ -94,7 +183,6 @@ void moisture_sensor_power_on(void) {
     ESP_LOGI(TAG, "Sensor power ON");
 }
 
-// 关闭传感器电源
 void moisture_sensor_power_off(void) {
     if (!s_is_powered) {
         ESP_LOGW(TAG, "Sensor already powered off");
@@ -103,28 +191,22 @@ void moisture_sensor_power_off(void) {
     gpio_control_set_level(s_power_pin, false);
     s_is_powered = false;
     ESP_LOGI(TAG, "Sensor power OFF");
-
-    // 停止正在运行的采集任务
     moisture_sensor_stop_reading();
 }
 
-// 获取电源状态
 bool moisture_sensor_is_powered(void) {
     return s_is_powered;
 }
 
-// 启动连续采集
 void moisture_sensor_start_reading(void) {
     if (!s_is_powered) {
         ESP_LOGE(TAG, "Cannot start reading: sensor power is off");
         return;
     }
-
     if (s_read_task_handle != NULL) {
         ESP_LOGW(TAG, "Reading task already running");
         return;
     }
-
     xTaskCreate(
         sensor_read_task,
         "sensor_read_task",
@@ -136,11 +218,186 @@ void moisture_sensor_start_reading(void) {
     ESP_LOGI(TAG, "Started continuous moisture reading (1s interval)");
 }
 
-// 手动停止采集
 void moisture_sensor_stop_reading(void) {
     if (s_read_task_handle != NULL) {
         vTaskDelete(s_read_task_handle);
         s_read_task_handle = NULL;
         ESP_LOGI(TAG, "Stopped continuous moisture reading");
     }
+}
+
+// ---------- 校准辅助函数 ----------
+
+/**
+ * @brief 采集一组样本并进行稳定性处理，带重试机制
+ * @param raw_avg 输出：原始ADC平均值
+ * @param volt_avg 输出：eFuse电压平均值
+ * @param max_retry 最大重试次数
+ * @return true 成功，false 失败
+ */
+static bool collect_stable_samples_with_retry(float *raw_avg, float *volt_avg, int max_retry, float threshold) {
+    int raw_buffer[SAMPLE_COUNT];
+    int volt_buffer[SAMPLE_COUNT];
+
+    for (int attempt = 1; attempt <= max_retry; attempt++) {
+        ESP_LOGI(TAG, "Attempt %d/%d: collecting %d samples (1s interval)...", attempt, max_retry, SAMPLE_COUNT);
+
+        for (int i = 0; i < SAMPLE_COUNT; i++) {
+            raw_buffer[i] = (int)adc_read_raw();
+            volt_buffer[i] = (int)adc_read_voltage_efuse();
+            ESP_LOGI(TAG, "Sample %2d: raw=%4d, volt_efuse=%4d mV", i+1, raw_buffer[i], volt_buffer[i]);
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }
+
+        // 对 raw 数据去除最大最小值
+        int raw_no_outliers[SAMPLE_COUNT];
+        int raw_count = data_processor_remove_outliers(raw_buffer, SAMPLE_COUNT, raw_no_outliers, 3);
+        if (raw_count < 3) {
+            ESP_LOGW(TAG, "Attempt %d: raw data insufficient after outlier removal", attempt);
+            goto retry_delay;
+        }
+
+        float raw_mean = data_processor_mean(raw_no_outliers, raw_count);
+        float raw_stddev = data_processor_stddev(raw_no_outliers, raw_count);
+        float raw_stddev_percent = (raw_stddev / raw_mean) * 100.0f;
+        ESP_LOGI(TAG, "Raw: mean=%.2f, stddev=%.2f (%.2f%%)", raw_mean, raw_stddev, raw_stddev_percent);
+
+        if (raw_stddev_percent > threshold) {
+            ESP_LOGW(TAG, "Attempt %d: raw stddev %.2f%% > threshold %.2f%%", attempt, raw_stddev_percent, threshold);
+            goto retry_delay;
+        }
+
+        // 对电压数据去除最大最小值
+        int volt_no_outliers[SAMPLE_COUNT];
+        int volt_count = data_processor_remove_outliers(volt_buffer, SAMPLE_COUNT, volt_no_outliers, 3);
+        if (volt_count < 3) {
+            ESP_LOGW(TAG, "Attempt %d: voltage data insufficient after outlier removal", attempt);
+            goto retry_delay;
+        }
+
+        float volt_mean = data_processor_mean(volt_no_outliers, volt_count);
+        float volt_stddev = data_processor_stddev(volt_no_outliers, volt_count);
+        float volt_stddev_percent = (volt_stddev / volt_mean) * 100.0f;
+        ESP_LOGI(TAG, "Voltage: mean=%.2f mV, stddev=%.2f (%.2f%%)", volt_mean, volt_stddev, volt_stddev_percent);
+
+        if (volt_stddev_percent > threshold) {
+            ESP_LOGW(TAG, "Attempt %d: voltage stddev %.2f%% > threshold %.2f%%", attempt, volt_stddev_percent, threshold);
+            goto retry_delay;
+        }
+
+        // 成功
+        *raw_avg = raw_mean;
+        *volt_avg = volt_mean;
+        return true;
+
+    retry_delay:
+        if (attempt < max_retry) {
+            ESP_LOGI(TAG, "Retrying in 2 seconds...");
+            vTaskDelay(2000 / portTICK_PERIOD_MS);
+        }
+    }
+
+    ESP_LOGE(TAG, "All %d attempts failed", max_retry);
+    return false;
+}
+
+// 干燥校准
+bool moisture_sensor_cal_dry(void) {
+    if (!s_is_powered) {
+        ESP_LOGE(TAG, "Cannot calibrate: sensor power is off");
+        return false;
+    }
+    moisture_sensor_stop_reading();
+
+    ESP_LOGI(TAG, "=== Dry Calibration ===");
+    ESP_LOGI(TAG, "Please ensure sensor is in dry air and stable.");
+    ESP_LOGI(TAG, "Sampling will take about %d seconds.", SAMPLE_COUNT);
+
+    float raw_mean, volt_mean;
+    if (!collect_stable_samples_with_retry(&raw_mean, &volt_mean, MAX_RETRY, DRY_STABILITY_THRESHOLD)) {
+        ESP_LOGE(TAG, "Dry calibration failed: data unstable after retries.");
+        return false;
+    }
+
+    s_raw_dry = raw_mean;
+    s_volt_efuse_dry = volt_mean;
+    s_dry_calibrated = true;
+    ESP_LOGI(TAG, "Dry calibration successful:");
+    ESP_LOGI(TAG, "  Raw avg: %.2f, eFuse voltage avg: %.2f mV", raw_mean, volt_mean);
+    ESP_LOGI(TAG, "  Target voltage (scope): %.0f mV", TARGET_VOLT_DRY);
+
+    if (s_wet_calibrated) {
+        // 双校准完成，计算线性拟合系数
+        s_k = (TARGET_VOLT_DRY - TARGET_VOLT_WET) / (s_volt_efuse_dry - s_volt_efuse_wet);
+        s_b = TARGET_VOLT_DRY - s_k * s_volt_efuse_dry;
+        ESP_LOGI(TAG, "Linear calibration computed: k=%.6f, b=%.2f", s_k, s_b);
+        ESP_LOGI(TAG, "Now continuous readings will show calibrated voltage and humidity.");
+    } else {
+        ESP_LOGI(TAG, "Wet calibration still needed to complete dual-point calibration.");
+    }
+    return true;
+}
+
+// 湿润校准
+bool moisture_sensor_cal_wet(void) {
+    if (!s_is_powered) {
+        ESP_LOGE(TAG, "Cannot calibrate: sensor power is off");
+        return false;
+    }
+    moisture_sensor_stop_reading();
+
+    ESP_LOGI(TAG, "=== Wet Calibration ===");
+    ESP_LOGI(TAG, "Please ensure sensor is in wet environment and stable.");
+    ESP_LOGI(TAG, "Sampling will take about %d seconds.", SAMPLE_COUNT);
+
+    float raw_mean, volt_mean;
+    if (!collect_stable_samples_with_retry(&raw_mean, &volt_mean, MAX_RETRY, WET_STABILITY_THRESHOLD)) {
+        ESP_LOGE(TAG, "Wet calibration failed: data unstable after retries.");
+        return false;
+    }
+
+    s_raw_wet = raw_mean;
+    s_volt_efuse_wet = volt_mean;
+    s_wet_calibrated = true;
+    ESP_LOGI(TAG, "Wet calibration successful:");
+    ESP_LOGI(TAG, "  Raw avg: %.2f, eFuse voltage avg: %.2f mV", raw_mean, volt_mean);
+    ESP_LOGI(TAG, "  Target voltage (scope): %.0f mV", TARGET_VOLT_WET);
+
+    if (s_dry_calibrated) {
+        s_k = (TARGET_VOLT_DRY - TARGET_VOLT_WET) / (s_volt_efuse_dry - s_volt_efuse_wet);
+        s_b = TARGET_VOLT_DRY - s_k * s_volt_efuse_dry;
+        ESP_LOGI(TAG, "Linear calibration computed: k=%.6f, b=%.2f", s_k, s_b);
+        ESP_LOGI(TAG, "Now continuous readings will show calibrated voltage and humidity.");
+    } else {
+        ESP_LOGI(TAG, "Dry calibration still needed to complete dual-point calibration.");
+    }
+    return true;
+}
+
+bool moisture_sensor_is_dry_calibrated(void) {
+    return s_dry_calibrated;
+}
+
+bool moisture_sensor_is_wet_calibrated(void) {
+    return s_wet_calibrated;
+}
+
+bool moisture_sensor_get_calibration(float *k, float *b) {
+    if (!s_dry_calibrated || !s_wet_calibrated) return false;
+    *k = s_k;
+    *b = s_b;
+    return true;
+}
+
+// 获取当前校准后的电压（用于连续采集）
+uint32_t moisture_sensor_get_calibrated_voltage(void) {
+    uint32_t volt_efuse = adc_read_voltage_efuse();
+    return apply_secondary_calibration(volt_efuse);
+}
+
+// 获取当前湿度百分比
+float moisture_sensor_get_humidity_percent(void) {
+    if (!s_dry_calibrated || !s_wet_calibrated) return 0.0f;
+    uint32_t volt_cal = moisture_sensor_get_calibrated_voltage();
+    return calculate_humidity_percent(volt_cal);
 }

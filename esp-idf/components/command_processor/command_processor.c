@@ -135,7 +135,6 @@ static void handle_moisture_command(const char* command) {
     else if (strcmp(sub, "cal wet") == 0) {
         moisture_sensor_cal_wet();
     }
-    // ---- 原有的模拟湿度设置（用于浇水测试）----
     else {
         ESP_LOGI(TAG, "格式错误，正确格式: moisture on/off/read/stop");
         ESP_LOGI(TAG, "示例: moisture 45, moisture on, moisture read");

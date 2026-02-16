@@ -130,12 +130,11 @@ static uint32_t apply_secondary_calibration(uint32_t volt_efuse) {
 
 // 计算湿度百分比（干燥=100%，湿润=0%）
 static float calculate_humidity_percent(uint32_t volt_calibrated) {
-    if (!s_dry_calibrated || !s_wet_calibrated) {
-        return 0.0f;
-    }
-    float range = TARGET_VOLT_DRY - TARGET_VOLT_WET;
+    float dry_target = TARGET_VOLT_DRY;
+    float wet_target = TARGET_VOLT_WET;
+    float range = dry_target - wet_target;
     if (range <= 0) return 0.0f;
-    float hum = (TARGET_VOLT_DRY - volt_calibrated) / range * 100.0f;
+    float hum = (dry_target - volt_calibrated) / range * 100.0f;
     if (hum < 0) hum = 0;
     if (hum > 100) hum = 100;
     return hum;
@@ -303,10 +302,15 @@ static bool collect_stable_samples_with_retry(float *raw_avg, float *volt_avg, i
 
 // 干燥校准
 bool moisture_sensor_cal_dry(void) {
-    if (!s_is_powered) {
-        ESP_LOGE(TAG, "Cannot calibrate: sensor power is off");
-        return false;
+    bool was_powered = s_is_powered;   // 记录校准前的电源状态
+
+    // 如果电源未开启，自动上电并等待2秒稳定
+    if (!was_powered) {
+        moisture_sensor_power_on();
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
     }
+
+    // 停止任何正在运行的连续采集任务，避免干扰
     moisture_sensor_stop_reading();
 
     ESP_LOGI(TAG, "=== Dry Calibration ===");
@@ -316,6 +320,10 @@ bool moisture_sensor_cal_dry(void) {
     float raw_mean, volt_mean;
     if (!collect_stable_samples_with_retry(&raw_mean, &volt_mean, MAX_RETRY, DRY_STABILITY_THRESHOLD)) {
         ESP_LOGE(TAG, "Dry calibration failed: data unstable after retries.");
+        // 校准失败，若电源原本是关的，则恢复关断
+        if (!was_powered) {
+            moisture_sensor_power_off();
+        }
         return false;
     }
 
@@ -335,15 +343,23 @@ bool moisture_sensor_cal_dry(void) {
     } else {
         ESP_LOGI(TAG, "Wet calibration still needed to complete dual-point calibration.");
     }
+
+    // 若电源原本是关的，校准完成后恢复关断
+    if (!was_powered) {
+        moisture_sensor_power_off();
+    }
     return true;
 }
 
 // 湿润校准
 bool moisture_sensor_cal_wet(void) {
-    if (!s_is_powered) {
-        ESP_LOGE(TAG, "Cannot calibrate: sensor power is off");
-        return false;
+    bool was_powered = s_is_powered;
+
+    if (!was_powered) {
+        moisture_sensor_power_on();
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
     }
+
     moisture_sensor_stop_reading();
 
     ESP_LOGI(TAG, "=== Wet Calibration ===");
@@ -353,6 +369,9 @@ bool moisture_sensor_cal_wet(void) {
     float raw_mean, volt_mean;
     if (!collect_stable_samples_with_retry(&raw_mean, &volt_mean, MAX_RETRY, WET_STABILITY_THRESHOLD)) {
         ESP_LOGE(TAG, "Wet calibration failed: data unstable after retries.");
+        if (!was_powered) {
+            moisture_sensor_power_off();
+        }
         return false;
     }
 
@@ -370,6 +389,10 @@ bool moisture_sensor_cal_wet(void) {
         ESP_LOGI(TAG, "Now continuous readings will show calibrated voltage and humidity.");
     } else {
         ESP_LOGI(TAG, "Dry calibration still needed to complete dual-point calibration.");
+    }
+
+    if (!was_powered) {
+        moisture_sensor_power_off();
     }
     return true;
 }
@@ -397,7 +420,6 @@ uint32_t moisture_sensor_get_calibrated_voltage(void) {
 
 // 获取当前湿度百分比
 float moisture_sensor_get_humidity_percent(void) {
-    if (!s_dry_calibrated || !s_wet_calibrated) return 0.0f;
-    uint32_t volt_cal = moisture_sensor_get_calibrated_voltage();
+    uint32_t volt_cal = moisture_sensor_get_calibrated_voltage(); // 未校准时返回原始eFuse电压
     return calculate_humidity_percent(volt_cal);
 }

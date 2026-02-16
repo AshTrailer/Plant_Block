@@ -35,7 +35,7 @@ typedef struct {
 } irrigation_state_t;
 
 static irrigation_config_t s_config = {
-    .pump_pin = 15,
+    .pump_pin = 18,
     .trigger_threshold = 50,    // 默认阈值50%
     .water_duration = 31.5f,    // 默认31.5秒
     .week_min_times = 1,        // 默认周最小1次
@@ -191,13 +191,28 @@ static bool sample_stable_humidity(float *humidity_avg, int max_retry) {
             goto retry_delay;
         }
         
-        // 计算平均值和标准差百分比
+        // 计算平均值和标准差
         float mean = data_processor_mean(valid_samples, valid_count);
         float stddev = data_processor_stddev(valid_samples, valid_count);
+        
+        // 处理均值为0的特殊情况
+        if (mean < 0.01f) {  // 接近0
+            if (stddev == 0) {
+                // 所有值相等，视为稳定
+                *humidity_avg = mean;
+                ESP_LOGI(TAG, "采样稳定（所有值相等），湿度=%.1f%%", mean);
+                return true;
+            } else {
+                // 均值为0但存在波动，数据异常，不稳定
+                ESP_LOGW(TAG, "尝试 %d: 均值为0但标准差非零，数据异常", attempt);
+                goto retry_delay;
+            }
+        }
+        
+        // 正常计算标准差百分比
         float stddev_percent = (stddev / mean) * 100.0f;
         ESP_LOGI(TAG, "采样结果: 平均值=%.1f%%, 标准差=%.2f (%.2f%%)", mean, stddev, stddev_percent);
         
-        // 检查稳定性
         if (stddev_percent <= SAMPLE_STABILITY_THRESHOLD) {
             *humidity_avg = mean;
             ESP_LOGI(TAG, "采样稳定，湿度=%.1f%%", mean);

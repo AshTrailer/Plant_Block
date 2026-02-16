@@ -137,7 +137,7 @@ static void handle_moisture_command(const char* command) {
     }
     // ---- 原有的模拟湿度设置（用于浇水测试）----
     else {
-        ESP_LOGI(TAG, "格式错误，正确格式: moisture <两位数字> 或 moisture on/off/read/stop");
+        ESP_LOGI(TAG, "格式错误，正确格式: moisture on/off/read/stop");
         ESP_LOGI(TAG, "示例: moisture 45, moisture on, moisture read");
     }
 }

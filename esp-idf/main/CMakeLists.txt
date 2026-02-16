@@ -10,4 +10,5 @@ idf_component_register(
         light_control
         irrigation_controller
         moisture_sensor
+        cloud_comm
 )

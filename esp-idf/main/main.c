@@ -10,6 +10,7 @@
 #include "light_control.h"
 #include "irrigation_controller.h"
 #include "moisture_sensor.h"
+#include "cloud_comm.h"
 
 void app_main(void) {
     ESP_LOGI("MAIN", "System starting, initializing components...");
@@ -17,6 +18,10 @@ void app_main(void) {
 
     ESP_LOGI("MAIN", "Initializing GPIO Control...");
     gpio_control_init();
+
+    ESP_LOGI("MAIN", "Initializing Cloud Communication...");
+    cloud_comm_init();
+    cloud_comm_start();
 
     ESP_LOGI("MAIN", "Initializing Time Manager...");
     time_manager_init();    

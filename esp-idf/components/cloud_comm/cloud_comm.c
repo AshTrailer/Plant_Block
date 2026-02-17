@@ -12,6 +12,8 @@
 #include "time.h"
 #include "time_manager.h"
 #include "command_processor.h"
+#include <string.h>
+#include <stdio.h>
 
 static const char *TAG = "CLOUD_COMM";
 
@@ -21,7 +23,7 @@ static const char *TAG = "CLOUD_COMM";
 
 // MQTT 配置
 #define MQTT_BROKER_URI "mqtts://aelecti.top:8883"
-#define DEVICE_ID       "esp32_dev01"   // 可改为从 NVS 读取
+#define DEVICE_ID       "Plant_Block_dev01"   // 可改为从 NVS 读取
 
 // 事件组位
 #define WIFI_CONNECTED_BIT BIT0
@@ -60,20 +62,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
 // ------------------ SNTP 时间同步 ------------------
 static void time_sync_notification_cb(struct timeval *tv)
 {
-    // 直接从 timeval 获取 UTC 时间（秒）
     time_t now_utc = tv->tv_sec;
-
-    // 转换为 UTC 时间结构（gmtime_r 不涉及时区）
-    struct tm timeinfo_utc;
-    gmtime_r(&now_utc, &timeinfo_utc);
-
-    // 手动加上8小时得到北京时间（CST）
-    // 注意：需要处理日期进位
-    time_t now_cst = now_utc + 8 * 3600;
+    time_t now_cst = now_utc + 8 * 3600; // UTC+8
     struct tm timeinfo_cst;
-    localtime_r(&now_cst, &timeinfo_cst);  // 或 gmtime_r + 手动调整
+    localtime_r(&now_cst, &timeinfo_cst);
 
-    // 调用 time_manager 更新系统时间（使用北京时间）
     time_manager_update_time(
         timeinfo_cst.tm_year + 1900,
         timeinfo_cst.tm_mon + 1,
@@ -90,7 +83,6 @@ static void time_sync_notification_cb(struct timeval *tv)
 
 static void sync_time(void)
 {
-    // 不再设置环境变量 TZ，全部手动处理偏移
     ESP_LOGI(TAG, "Initializing SNTP...");
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
     esp_sntp_setservername(0, "aelecti.top");
@@ -126,7 +118,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             esp_mqtt_client_subscribe(event->client, cmd_topic, 1);
             ESP_LOGI(TAG, "Subscribed to %s", cmd_topic);
 
-            // 发送上线通知
+            // 发送上线通知（遗嘱会在异常断开时自动发送 offline）
             char status_topic[64];
             snprintf(status_topic, sizeof(status_topic), "registry/%s/status", DEVICE_ID);
             esp_mqtt_client_publish(event->client, status_topic, "online", 0, 1, 0);
@@ -141,25 +133,22 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             break;
 
         case MQTT_EVENT_DATA:
-            // 先调用用户注册的回调（如果有）
             if (s_msg_cb) {
                 s_msg_cb(event->topic, event->topic_len, event->data, event->data_len);
             }
 
-            // 检查是否为命令主题：device/{DEVICE_ID}/cmd
+            // 检查是否为命令主题
             char expected_topic[64];
             snprintf(expected_topic, sizeof(expected_topic), "device/%s/cmd", DEVICE_ID);
             if (event->topic_len == strlen(expected_topic) &&
                 strncmp(event->topic, expected_topic, event->topic_len) == 0) {
                 
-                // 将 MQTT 数据转换为以 '\0' 结尾的字符串
                 char cmd_buf[256];
                 int copy_len = (event->data_len < sizeof(cmd_buf) - 1) ? event->data_len : sizeof(cmd_buf) - 1;
                 memcpy(cmd_buf, event->data, copy_len);
                 cmd_buf[copy_len] = '\0';
                 
                 ESP_LOGI(TAG, "Received command: %s", cmd_buf);
-                // 直接调用命令处理器执行命令
                 command_processor_process_frame(cmd_buf);
             }
             break;
@@ -220,16 +209,25 @@ static void wifi_init_sta(void)
 // ------------------ 启动 MQTT ------------------
 static void mqtt_app_start(void)
 {
-    const esp_mqtt_client_config_t mqtt_cfg = {
+    // 遗嘱消息配置：当设备异常断开时，发布 offline 到 registry/{deviceId}/status
+    esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = MQTT_BROKER_URI,
         .broker.verification.certificate = server_cert,
-        .session.keepalive = 60,
+        .session.keepalive = 10,
         .credentials.client_id = DEVICE_ID,
+        .session.last_will = {
+            .topic = "registry/" DEVICE_ID "/status",
+            .msg = "offline",
+            .msg_len = 7,
+            .qos = 1,
+            .retain = false
+        }
     };
 
     esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
     esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
     esp_mqtt_client_start(client);
+    ESP_LOGI(TAG, "will message set to topic: registry/%s/status, payload: offline", DEVICE_ID);
 }
 
 // ------------------ 公共接口 ------------------
@@ -280,6 +278,30 @@ void cloud_comm_publish(const char *sub_topic, const char *data)
     snprintf(full_topic, sizeof(full_topic), "device/%s/%s", DEVICE_ID, sub_topic);
     int msg_id = esp_mqtt_client_publish(s_mqtt_client, full_topic, data, 0, 1, 0);
     ESP_LOGI(TAG, "Published to %s, msg_id=%d", full_topic, msg_id);
+}
+
+void cloud_comm_publish_log(const char *format, ...)
+{
+    if (!s_mqtt_connected || !s_mqtt_client) {
+        return; // 未连接时不发送
+    }
+
+    // 获取当前时间字符串
+    const char *time_str = time_manager_get_time_string(); // 格式如 "2026/02/16 21:30:09 星期一"
+    
+    char log_buf[512];
+    int len = snprintf(log_buf, sizeof(log_buf), "[%s] ", time_str);
+    
+    va_list args;
+    va_start(args, format);
+    len += vsnprintf(log_buf + len, sizeof(log_buf) - len, format, args);
+    va_end(args);
+
+    if (len < 0 || len >= sizeof(log_buf)) {
+        ESP_LOGW(TAG, "Log message too long, truncated");
+    }
+
+    cloud_comm_publish("log", log_buf);
 }
 
 void cloud_comm_register_msg_cb(cloud_comm_msg_cb_t callback)

@@ -27,6 +27,13 @@ bool cloud_comm_is_mqtt_connected(void);
 void cloud_comm_publish(const char *sub_topic, const char *data);
 
 /**
+ * @brief 发布日志消息（自动添加时间戳）
+ * @param format    printf 风格格式字符串
+ * @param ...       可变参数
+ */
+void cloud_comm_publish_log(const char *format, ...);
+
+/**
  * @brief 注册消息接收回调（当收到订阅的指令时调用）
  * @param callback 回调函数，参数为 (topic, topic_len, data, data_len)
  */

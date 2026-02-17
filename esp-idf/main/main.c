@@ -19,10 +19,6 @@ void app_main(void) {
     ESP_LOGI("MAIN", "Initializing GPIO Control...");
     gpio_control_init();
 
-    ESP_LOGI("MAIN", "Initializing Cloud Communication...");
-    cloud_comm_init();
-    cloud_comm_start();
-
     ESP_LOGI("MAIN", "Initializing Time Manager...");
     time_manager_init();    
 
@@ -44,6 +40,10 @@ void app_main(void) {
 
     ESP_LOGI("MAIN", "Initializing Irrigation Controller...");
     irrigation_controller_init(18);
+
+    ESP_LOGI("MAIN", "Initializing Cloud Communication...");
+    cloud_comm_init();
+    cloud_comm_start();
 
     ESP_LOGI("MAIN", "All components initialized.");
 

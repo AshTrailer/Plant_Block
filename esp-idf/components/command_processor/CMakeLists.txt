@@ -6,4 +6,5 @@ idf_component_register(
         time_manager
         irrigation_controller
         moisture_sensor
+        cloud_comm
 )

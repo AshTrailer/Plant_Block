@@ -5,4 +5,5 @@ idf_component_register(
         gpio_control
         time_manager
         moisture_sensor
+        cloud_comm
 )

@@ -301,7 +301,7 @@ void cloud_comm_publish_log(const char *format, ...)
         ESP_LOGW(TAG, "Log message too long, truncated");
     }
 
-    cloud_comm_publish("log", log_buf);
+    cloud_comm_publish("msg", log_buf);
 }
 
 void cloud_comm_register_msg_cb(cloud_comm_msg_cb_t callback)

@@ -4,4 +4,5 @@ idf_component_register(
     REQUIRES 
         gpio_control
         time_manager
+        cloud_comm
 )

@@ -8,10 +8,26 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "gpio_control.h"
 #include "data_processor.h"
+#include "cloud_comm.h"
 #include <string.h>
 #include <math.h>
 
 static const char *TAG = "MOISTURE_SENSOR";
+
+#define MOISTURE_LOGI(fmt, ...) do { \
+    ESP_LOGI(TAG, fmt, ##__VA_ARGS__); \
+    cloud_comm_publish_log("[I] " fmt, ##__VA_ARGS__); \
+} while(0)
+
+#define MOISTURE_LOGE(fmt, ...) do { \
+    ESP_LOGE(TAG, fmt, ##__VA_ARGS__); \
+    cloud_comm_publish_log("[E] " fmt, ##__VA_ARGS__); \
+} while(0)
+
+#define MOISTURE_LOGW(fmt, ...) do { \
+    ESP_LOGW(TAG, fmt, ##__VA_ARGS__); \
+    cloud_comm_publish_log("[W] " fmt, ##__VA_ARGS__); \
+} while(0)
 
 // 硬件配置
 static int s_power_pin = 15;
@@ -72,7 +88,7 @@ static bool adc_calibration_init(void) {
 
     s_adc_cali_handle = cali_handle;
     if (!calibrated) {
-        ESP_LOGW(TAG, "eFuse calibration failed - fallback to raw * 3300 / 4095");
+        MOISTURE_LOGW("eFuse calibration failed - fallback to raw * 3300 / 4095");
     }
     return calibrated;
 }
@@ -90,7 +106,7 @@ static void adc_init(void) {
         .bitwidth = ADC_BITWIDTH_12,
     };
     ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, ADC_CHANNEL_2, &chan_cfg));
-    ESP_LOGI(TAG, "ADC configured: GPIO%d (ADC1_CH2), 12-bit, 0-3.3V", s_adc_pin);
+    MOISTURE_LOGI("ADC configured: GPIO%d (ADC1_CH2), 12-bit, 0-3.3V", s_adc_pin);
 
     adc_calibration_init();
 }
@@ -142,12 +158,12 @@ static float calculate_humidity_percent(uint32_t volt_calibrated) {
 
 // 连续采集任务
 static void sensor_read_task(void *arg) {
-    ESP_LOGI(TAG, "Sensor reading task started, waiting 2s for sensor stabilization...");
+    MOISTURE_LOGI("Sensor reading task started, waiting 2s for sensor stabilization...");
     vTaskDelay(2000 / portTICK_PERIOD_MS);
 
     while (1) {
         if (!s_is_powered) {
-            ESP_LOGI(TAG, "Sensor power off, stop reading");
+            MOISTURE_LOGI("Sensor power off, stop reading");
             break;
         }
         // 读取eFuse电压
@@ -156,7 +172,7 @@ static void sensor_read_task(void *arg) {
         uint32_t volt_cal = apply_secondary_calibration(volt_efuse);
         float hum = calculate_humidity_percent(volt_cal);
 
-        ESP_LOGI(TAG, "Voltage: %lu mV, Humidity: %.1f%%", volt_cal, hum);
+        MOISTURE_LOGI("Voltage: %lu mV, Humidity: %.1f%%", volt_cal, hum);
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
     s_read_task_handle = NULL;
@@ -168,28 +184,28 @@ void moisture_sensor_init(int power_pin, int adc_pin) {
     s_power_pin = power_pin;
     s_adc_pin = adc_pin;
     adc_init();
-    ESP_LOGI(TAG, "Moisture sensor module initialized");
-    ESP_LOGI(TAG, "Power pin: GPIO%d, ADC pin: GPIO%d", s_power_pin, s_adc_pin);
+    MOISTURE_LOGI("Moisture sensor module initialized");
+    MOISTURE_LOGI("Power pin: GPIO%d, ADC pin: GPIO%d", s_power_pin, s_adc_pin);
 }
 
 void moisture_sensor_power_on(void) {
     if (s_is_powered) {
-        ESP_LOGW(TAG, "Sensor already powered on");
+        MOISTURE_LOGW("Sensor already powered on");
         return;
     }
     gpio_control_set_level(s_power_pin, true);
     s_is_powered = true;
-    ESP_LOGI(TAG, "Sensor power ON");
+    MOISTURE_LOGI("Sensor power ON");
 }
 
 void moisture_sensor_power_off(void) {
     if (!s_is_powered) {
-        ESP_LOGW(TAG, "Sensor already powered off");
+        MOISTURE_LOGW("Sensor already powered off");
         return;
     }
     gpio_control_set_level(s_power_pin, false);
     s_is_powered = false;
-    ESP_LOGI(TAG, "Sensor power OFF");
+    MOISTURE_LOGI("Sensor power OFF");
     moisture_sensor_stop_reading();
 }
 
@@ -199,11 +215,11 @@ bool moisture_sensor_is_powered(void) {
 
 void moisture_sensor_start_reading(void) {
     if (!s_is_powered) {
-        ESP_LOGE(TAG, "Cannot start reading: sensor power is off");
+        MOISTURE_LOGE("Cannot start reading: sensor power is off");
         return;
     }
     if (s_read_task_handle != NULL) {
-        ESP_LOGW(TAG, "Reading task already running");
+        MOISTURE_LOGW("Reading task already running");
         return;
     }
     xTaskCreate(
@@ -214,14 +230,14 @@ void moisture_sensor_start_reading(void) {
         2,
         &s_read_task_handle
     );
-    ESP_LOGI(TAG, "Started continuous moisture reading (1s interval)");
+    MOISTURE_LOGI("Started continuous moisture reading (1s interval)");
 }
 
 void moisture_sensor_stop_reading(void) {
     if (s_read_task_handle != NULL) {
         vTaskDelete(s_read_task_handle);
         s_read_task_handle = NULL;
-        ESP_LOGI(TAG, "Stopped continuous moisture reading");
+        MOISTURE_LOGI("Stopped continuous moisture reading");
     }
 }
 
@@ -239,12 +255,12 @@ static bool collect_stable_samples_with_retry(float *raw_avg, float *volt_avg, i
     int volt_buffer[SAMPLE_COUNT];
 
     for (int attempt = 1; attempt <= max_retry; attempt++) {
-        ESP_LOGI(TAG, "Attempt %d/%d: collecting %d samples (1s interval)...", attempt, max_retry, SAMPLE_COUNT);
+        MOISTURE_LOGI("Attempt %d/%d: collecting %d samples (1s interval)...", attempt, max_retry, SAMPLE_COUNT);
 
         for (int i = 0; i < SAMPLE_COUNT; i++) {
             raw_buffer[i] = (int)adc_read_raw();
             volt_buffer[i] = (int)adc_read_voltage_efuse();
-            ESP_LOGI(TAG, "Sample %2d: raw=%4d, volt_efuse=%4d mV", i+1, raw_buffer[i], volt_buffer[i]);
+            MOISTURE_LOGI("Sample %2d: raw=%4d, volt_efuse=%4d mV", i+1, raw_buffer[i], volt_buffer[i]);
             vTaskDelay(1000 / portTICK_PERIOD_MS);
         }
 
@@ -252,17 +268,17 @@ static bool collect_stable_samples_with_retry(float *raw_avg, float *volt_avg, i
         int raw_no_outliers[SAMPLE_COUNT];
         int raw_count = data_processor_remove_outliers(raw_buffer, SAMPLE_COUNT, raw_no_outliers, 3);
         if (raw_count < 3) {
-            ESP_LOGW(TAG, "Attempt %d: raw data insufficient after outlier removal", attempt);
+            MOISTURE_LOGW("Attempt %d: raw data insufficient after outlier removal", attempt);
             goto retry_delay;
         }
 
         float raw_mean = data_processor_mean(raw_no_outliers, raw_count);
         float raw_stddev = data_processor_stddev(raw_no_outliers, raw_count);
         float raw_stddev_percent = (raw_stddev / raw_mean) * 100.0f;
-        ESP_LOGI(TAG, "Raw: mean=%.2f, stddev=%.2f (%.2f%%)", raw_mean, raw_stddev, raw_stddev_percent);
+        MOISTURE_LOGI("Raw: mean=%.2f, stddev=%.2f (%.2f%%)", raw_mean, raw_stddev, raw_stddev_percent);
 
         if (raw_stddev_percent > threshold) {
-            ESP_LOGW(TAG, "Attempt %d: raw stddev %.2f%% > threshold %.2f%%", attempt, raw_stddev_percent, threshold);
+            MOISTURE_LOGW("Attempt %d: raw stddev %.2f%% > threshold %.2f%%", attempt, raw_stddev_percent, threshold);
             goto retry_delay;
         }
 
@@ -270,17 +286,17 @@ static bool collect_stable_samples_with_retry(float *raw_avg, float *volt_avg, i
         int volt_no_outliers[SAMPLE_COUNT];
         int volt_count = data_processor_remove_outliers(volt_buffer, SAMPLE_COUNT, volt_no_outliers, 3);
         if (volt_count < 3) {
-            ESP_LOGW(TAG, "Attempt %d: voltage data insufficient after outlier removal", attempt);
+            MOISTURE_LOGW("Attempt %d: voltage data insufficient after outlier removal", attempt);
             goto retry_delay;
         }
 
         float volt_mean = data_processor_mean(volt_no_outliers, volt_count);
         float volt_stddev = data_processor_stddev(volt_no_outliers, volt_count);
         float volt_stddev_percent = (volt_stddev / volt_mean) * 100.0f;
-        ESP_LOGI(TAG, "Voltage: mean=%.2f mV, stddev=%.2f (%.2f%%)", volt_mean, volt_stddev, volt_stddev_percent);
+        MOISTURE_LOGI("Voltage: mean=%.2f mV, stddev=%.2f (%.2f%%)", volt_mean, volt_stddev, volt_stddev_percent);
 
         if (volt_stddev_percent > threshold) {
-            ESP_LOGW(TAG, "Attempt %d: voltage stddev %.2f%% > threshold %.2f%%", attempt, volt_stddev_percent, threshold);
+            MOISTURE_LOGW("Attempt %d: voltage stddev %.2f%% > threshold %.2f%%", attempt, volt_stddev_percent, threshold);
             goto retry_delay;
         }
 
@@ -291,12 +307,12 @@ static bool collect_stable_samples_with_retry(float *raw_avg, float *volt_avg, i
 
     retry_delay:
         if (attempt < max_retry) {
-            ESP_LOGI(TAG, "Retrying in 2 seconds...");
+            MOISTURE_LOGI("Retrying in 2 seconds...");
             vTaskDelay(2000 / portTICK_PERIOD_MS);
         }
     }
 
-    ESP_LOGE(TAG, "All %d attempts failed", max_retry);
+    MOISTURE_LOGE("All %d attempts failed", max_retry);
     return false;
 }
 
@@ -313,13 +329,13 @@ bool moisture_sensor_cal_dry(void) {
     // 停止任何正在运行的连续采集任务，避免干扰
     moisture_sensor_stop_reading();
 
-    ESP_LOGI(TAG, "=== Dry Calibration ===");
-    ESP_LOGI(TAG, "Please ensure sensor is in dry air and stable.");
-    ESP_LOGI(TAG, "Sampling will take about %d seconds.", SAMPLE_COUNT);
+    MOISTURE_LOGI("=== Dry Calibration ===");
+    MOISTURE_LOGI("Please ensure sensor is in dry air and stable.");
+    MOISTURE_LOGI("Sampling will take about %d seconds.", SAMPLE_COUNT);
 
     float raw_mean, volt_mean;
     if (!collect_stable_samples_with_retry(&raw_mean, &volt_mean, MAX_RETRY, DRY_STABILITY_THRESHOLD)) {
-        ESP_LOGE(TAG, "Dry calibration failed: data unstable after retries.");
+        MOISTURE_LOGE("Dry calibration failed: data unstable after retries.");
         // 校准失败，若电源原本是关的，则恢复关断
         if (!was_powered) {
             moisture_sensor_power_off();
@@ -330,18 +346,18 @@ bool moisture_sensor_cal_dry(void) {
     s_raw_dry = raw_mean;
     s_volt_efuse_dry = volt_mean;
     s_dry_calibrated = true;
-    ESP_LOGI(TAG, "Dry calibration successful:");
-    ESP_LOGI(TAG, "  Raw avg: %.2f, eFuse voltage avg: %.2f mV", raw_mean, volt_mean);
-    ESP_LOGI(TAG, "  Target voltage (scope): %.0f mV", TARGET_VOLT_DRY);
+    MOISTURE_LOGI("Dry calibration successful:");
+    MOISTURE_LOGI("  Raw avg: %.2f, eFuse voltage avg: %.2f mV", raw_mean, volt_mean);
+    MOISTURE_LOGI("  Target voltage (scope): %.0f mV", TARGET_VOLT_DRY);
 
     if (s_wet_calibrated) {
         // 双校准完成，计算线性拟合系数
         s_k = (TARGET_VOLT_DRY - TARGET_VOLT_WET) / (s_volt_efuse_dry - s_volt_efuse_wet);
         s_b = TARGET_VOLT_DRY - s_k * s_volt_efuse_dry;
-        ESP_LOGI(TAG, "Linear calibration computed: k=%.6f, b=%.2f", s_k, s_b);
-        ESP_LOGI(TAG, "Now continuous readings will show calibrated voltage and humidity.");
+        MOISTURE_LOGI("Linear calibration computed: k=%.6f, b=%.2f", s_k, s_b);
+        MOISTURE_LOGI("Now continuous readings will show calibrated voltage and humidity.");
     } else {
-        ESP_LOGI(TAG, "Wet calibration still needed to complete dual-point calibration.");
+        MOISTURE_LOGI("Wet calibration still needed to complete dual-point calibration.");
     }
 
     // 若电源原本是关的，校准完成后恢复关断
@@ -362,13 +378,13 @@ bool moisture_sensor_cal_wet(void) {
 
     moisture_sensor_stop_reading();
 
-    ESP_LOGI(TAG, "=== Wet Calibration ===");
-    ESP_LOGI(TAG, "Please ensure sensor is in wet environment and stable.");
-    ESP_LOGI(TAG, "Sampling will take about %d seconds.", SAMPLE_COUNT);
+    MOISTURE_LOGI("=== Wet Calibration ===");
+    MOISTURE_LOGI("Please ensure sensor is in wet environment and stable.");
+    MOISTURE_LOGI("Sampling will take about %d seconds.", SAMPLE_COUNT);
 
     float raw_mean, volt_mean;
     if (!collect_stable_samples_with_retry(&raw_mean, &volt_mean, MAX_RETRY, WET_STABILITY_THRESHOLD)) {
-        ESP_LOGE(TAG, "Wet calibration failed: data unstable after retries.");
+        MOISTURE_LOGE("Wet calibration failed: data unstable after retries.");
         if (!was_powered) {
             moisture_sensor_power_off();
         }
@@ -378,17 +394,17 @@ bool moisture_sensor_cal_wet(void) {
     s_raw_wet = raw_mean;
     s_volt_efuse_wet = volt_mean;
     s_wet_calibrated = true;
-    ESP_LOGI(TAG, "Wet calibration successful:");
-    ESP_LOGI(TAG, "  Raw avg: %.2f, eFuse voltage avg: %.2f mV", raw_mean, volt_mean);
-    ESP_LOGI(TAG, "  Target voltage (scope): %.0f mV", TARGET_VOLT_WET);
+    MOISTURE_LOGI("Wet calibration successful:");
+    MOISTURE_LOGI("  Raw avg: %.2f, eFuse voltage avg: %.2f mV", raw_mean, volt_mean);
+    MOISTURE_LOGI("  Target voltage (scope): %.0f mV", TARGET_VOLT_WET);
 
     if (s_dry_calibrated) {
         s_k = (TARGET_VOLT_DRY - TARGET_VOLT_WET) / (s_volt_efuse_dry - s_volt_efuse_wet);
         s_b = TARGET_VOLT_DRY - s_k * s_volt_efuse_dry;
-        ESP_LOGI(TAG, "Linear calibration computed: k=%.6f, b=%.2f", s_k, s_b);
-        ESP_LOGI(TAG, "Now continuous readings will show calibrated voltage and humidity.");
+        MOISTURE_LOGI("Linear calibration computed: k=%.6f, b=%.2f", s_k, s_b);
+        MOISTURE_LOGI("Now continuous readings will show calibrated voltage and humidity.");
     } else {
-        ESP_LOGI(TAG, "Dry calibration still needed to complete dual-point calibration.");
+        MOISTURE_LOGI("Dry calibration still needed to complete dual-point calibration.");
     }
 
     if (!was_powered) {

@@ -6,4 +6,5 @@ idf_component_register(
         driver
         esp_adc
         data_processor
+        cloud_comm
 )

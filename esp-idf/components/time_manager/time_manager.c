@@ -6,8 +6,24 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include "cloud_comm.h"
 
 static const char *TAG = "TIME_MGR";
+
+#define TIME_LOGI(fmt, ...) do { \
+    ESP_LOGI(TAG, fmt, ##__VA_ARGS__); \
+    cloud_comm_publish_log("[I] " fmt, ##__VA_ARGS__); \
+} while(0)
+
+#define TIME_LOGE(fmt, ...) do { \
+    ESP_LOGE(TAG, fmt, ##__VA_ARGS__); \
+    cloud_comm_publish_log("[E] " fmt, ##__VA_ARGS__); \
+} while(0)
+
+#define TIME_LOGW(fmt, ...) do { \
+    ESP_LOGW(TAG, fmt, ##__VA_ARGS__); \
+    cloud_comm_publish_log("[W] " fmt, ##__VA_ARGS__); \
+} while(0)
 
 // 内部时间变量
 static system_time_t s_current_time = {
@@ -160,19 +176,19 @@ static time_t calculate_unix_time(int year, int month, int day, int hour, int mi
 // 边界检查函数
 static bool check_time_boundaries(int month, int hour, int minute, int second) {
     if (month < 1 || month > 12) {
-        ESP_LOGE(TAG, "Months out of range: %d", month);
+        TIME_LOGE("Months out of range: %d", month);
         return false;
     }
     if (hour < 0 || hour > 23) {
-        ESP_LOGE(TAG, "Hours out of range: %d", hour);
+        TIME_LOGE("Hours out of range: %d", hour);
         return false;
     }
     if (minute < 0 || minute > 59) {
-        ESP_LOGE(TAG, "Minutes out of range: %d", minute);
+        TIME_LOGE("Minutes out of range: %d", minute);
         return false;
     }
     if (second < 0 || second > 59) {
-        ESP_LOGE(TAG, "Seconds out of range: %d", second);
+        TIME_LOGE("Seconds out of range: %d", second);
         return false;
     }
     return true;
@@ -287,7 +303,7 @@ static void update_time_string(void) {
 
 // 时间递增任务（每秒更新一次）
 static void time_update_task(void *arg) {
-    ESP_LOGI(TAG, "Time update task started");
+    TIME_LOGI("Time update task started");
     
     while (1) {
         vTaskDelay(1000 / portTICK_PERIOD_MS); // 等待1秒
@@ -357,7 +373,7 @@ void time_manager_init(void) {
     // 创建互斥锁
     s_time_mutex = xSemaphoreCreateMutex();
     if (s_time_mutex == NULL) {
-        ESP_LOGE(TAG, "Failed to create time mutex");
+        TIME_LOGE("Failed to create time mutex");
         return;
     }
 
@@ -377,11 +393,11 @@ void time_manager_init(void) {
     
     if (s_time_task_handle != NULL) {
         s_time_task_running = true;
-        ESP_LOGI(TAG, "Time Manager Initialized");
-        ESP_LOGI(TAG, "Initial time: %s", s_time_string);
-        ESP_LOGI(TAG, "Unix timestamp: %ld", s_current_time.unix_time);
+        TIME_LOGI("Time Manager Initialized");
+        TIME_LOGI("Initial time: %s", s_time_string);
+        TIME_LOGI("Unix timestamp: %ld", s_current_time.unix_time);
     } else {
-        ESP_LOGE(TAG, "Create time update task failed");
+        TIME_LOGE("Create time update task failed");
     }
 }
 
@@ -394,14 +410,14 @@ bool time_manager_set_time(int year, int month, int day, int hour, int minute, i
     
     // 年份检查
     if (year < 1970) {
-        ESP_LOGE(TAG, "Year %d should not before 1970", year);
+        TIME_LOGE("Year %d should not before 1970", year);
         return false;
     }
     
     // 日期有效性检查（基于实际月份天数）
     int max_days = get_days_in_month(year, month);
     if (day < 1 || day > max_days) {
-        ESP_LOGE(TAG, "Day %d is out of range for month %d (max: %d)", day, month, max_days);
+        TIME_LOGE("Day %d is out of range for month %d (max: %d)", day, month, max_days);
         return false;
     }
     
@@ -421,8 +437,8 @@ bool time_manager_set_time(int year, int month, int day, int hour, int minute, i
         
         xSemaphoreGive(s_time_mutex);
         
-        ESP_LOGI(TAG, "Time set to: %s", s_time_string);
-        ESP_LOGI(TAG, "Unix timestamp: %ld", s_current_time.unix_time);
+        TIME_LOGI("Time set to: %s", s_time_string);
+        TIME_LOGI("Unix timestamp: %ld", s_current_time.unix_time);
         return true;
     }
     
@@ -432,7 +448,7 @@ bool time_manager_set_time(int year, int month, int day, int hour, int minute, i
 // 从Unix时间戳设置系统时间
 bool time_manager_set_time_from_unix(time_t unix_time) {
     if (unix_time < 0) {
-        ESP_LOGE(TAG, "Unix time should be positive");
+        TIME_LOGE("Unix time should be positive");
         return false;
     }
     
@@ -445,8 +461,8 @@ bool time_manager_set_time_from_unix(time_t unix_time) {
         
         xSemaphoreGive(s_time_mutex);
         
-        ESP_LOGI(TAG, "Time set from Unix timestamp: %s", s_time_string);
-        ESP_LOGI(TAG, "Unix timestamp: %ld", s_current_time.unix_time);
+        TIME_LOGI("Time set from Unix timestamp: %s", s_time_string);
+        TIME_LOGI("Unix timestamp: %ld", s_current_time.unix_time);
         return true;
     }
     
@@ -486,6 +502,7 @@ const char* time_manager_get_time_string(void) {
 void time_manager_update_time(int year, int month, int day, int hour, int minute, int second) {
     // 直接调用设置函数，确保边界检查
     time_manager_set_time(year, month, day, hour, minute, second);
+    TIME_LOGI("当前时间: %s", time_manager_get_time_string());
 }
 
 // 获取当前星期几（0=星期日，1=星期一，...，6=星期六）

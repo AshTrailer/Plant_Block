@@ -4,4 +4,5 @@ idf_component_register(
     REQUIRES 
         driver
         ventilation_control
+        cloud_comm
 )

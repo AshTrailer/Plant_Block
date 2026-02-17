@@ -2,9 +2,25 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include <string.h>
-#include <stdlib.h> 
+#include <stdlib.h>
+#include "cloud_comm.h"
 
 static const char *TAG = "GPIO_CONTROL";
+
+#define GPIO_LOGE(fmt, ...) do { \
+    ESP_LOGE(TAG, fmt, ##__VA_ARGS__); \
+    cloud_comm_publish_log("[E] " fmt, ##__VA_ARGS__); \
+} while(0)
+
+#define GPIO_LOGW(fmt, ...) do { \
+    ESP_LOGW(TAG, fmt, ##__VA_ARGS__); \
+    cloud_comm_publish_log("[W] " fmt, ##__VA_ARGS__); \
+} while(0)
+
+#define GPIO_LOGI(fmt, ...) do { \
+    ESP_LOGI(TAG, fmt, ##__VA_ARGS__); \
+    cloud_comm_publish_log("[I] " fmt, ##__VA_ARGS__); \
+} while(0)
 
 // 初始化时配置的GPIO引脚列表
 static const int s_managed_pins[] = {1, 3, 4, 5, 6, 7, 8, 9, 14, 15, 18};
@@ -25,7 +41,7 @@ static bool is_pin_managed(int pin) {
 void gpio_control_init(void) {
     esp_err_t ret;
     
-    ESP_LOGI(TAG, "Starting configuration of %d GPIO pins to low level...", s_managed_pin_count);
+    GPIO_LOGI("Starting configuration of %d GPIO pins to low level...", s_managed_pin_count);
     
     for (int i = 0; i < s_managed_pin_count; i++) {
         gpio_num_t pin_num = s_managed_pins[i];
@@ -44,31 +60,31 @@ void gpio_control_init(void) {
         
         ret = gpio_config(&io_conf);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "GPIO Pin %d config failed: %s", pin_num, esp_err_to_name(ret));
+            GPIO_LOGE("GPIO Pin %d config failed: %s", pin_num, esp_err_to_name(ret));
             continue;
         }
         
         // 初始设置为低电平
         gpio_set_level(pin_num, 0);
         
-        ESP_LOGI(TAG, "GPIO Pin %d set to low level", pin_num);
+        GPIO_LOGI("GPIO Pin %d set to low level", pin_num);
     }
     
-    ESP_LOGI(TAG, "GPIO Control Module Initialization Complete");
-    ESP_LOGI(TAG, "Available Pins: 1, 3, 4, 5, 6, 7, 8, 9, 14, 15, 18");
+    GPIO_LOGI("GPIO Control Module Initialization Complete");
+    GPIO_LOGI("Available Pins: 1, 3, 4, 5, 6, 7, 8, 9, 14, 15, 18");
 }
 
 // 控制指定GPIO引脚的电平
 bool gpio_control_set_level(int pin, bool level) {
     // 验证引脚号是否在受管理列表中
     if (!is_pin_managed(pin)) {
-        ESP_LOGE(TAG, "Error: Pin %d is not in managed list", pin);
+        GPIO_LOGE("Error: Pin %d is not in managed list", pin);
         return false;
     }
     
     // 验证引脚号合法性
     if (pin < 0 || pin > GPIO_NUM_MAX) {
-        ESP_LOGE(TAG, "Error: Pin %d is out of valid range", pin);
+        GPIO_LOGE("Error: Pin %d is out of valid range", pin);
         return false;
     }
     
@@ -76,7 +92,7 @@ bool gpio_control_set_level(int pin, bool level) {
     gpio_num_t gpio_pin = pin;
     gpio_set_level(gpio_pin, level ? 1 : 0);
     
-    ESP_LOGI(TAG, "GPIO Pin %d level set to: %s (%.1fV)", 
+    GPIO_LOGI("GPIO Pin %d level set to: %s (%.1fV)", 
              pin, 
              level ? "High Level" : "Low Level",
              level ? 3.3 : 0.0);
@@ -92,5 +108,5 @@ void gpio_control_deinit(void) {
     gpio_reset_pin(GPIO_NUM_8);
     gpio_reset_pin(GPIO_NUM_9);
     
-    ESP_LOGI(TAG, "GPIO Control Deinitialization Complete");
+    GPIO_LOGI("GPIO Control Deinitialization Complete");
 }   

@@ -96,7 +96,7 @@ static bool adc_calibration_init(void) {
 // ADC 硬件初始化
 static void adc_init(void) {
     adc_oneshot_unit_init_cfg_t init_cfg = {
-        .unit_id = ADC_UNIT_1,
+        .unit_id = ADC_UNIT_1,//ADC_UNIT_1
         .ulp_mode = ADC_ULP_MODE_DISABLE,
     };
     ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_cfg, &s_adc_handle));
@@ -105,7 +105,7 @@ static void adc_init(void) {
         .atten = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_12,
     };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, ADC_CHANNEL_2, &chan_cfg));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, ADC_CHANNEL_4, &chan_cfg));//ADC_CHANNEL_2
     MOISTURE_LOGI("ADC configured: GPIO%d (ADC1_CH2), 12-bit, 0-3.3V", s_adc_pin);
 
     adc_calibration_init();
@@ -114,14 +114,14 @@ static void adc_init(void) {
 // 读取原始ADC值
 static uint32_t adc_read_raw(void) {
     int raw = 0;
-    ESP_ERROR_CHECK(adc_oneshot_read(s_adc_handle, ADC_CHANNEL_2, &raw));
+    ESP_ERROR_CHECK(adc_oneshot_read(s_adc_handle, ADC_CHANNEL_4, &raw));//ADC_CHANNEL_2
     return (uint32_t)raw;
 }
 
 // 读取eFuse校准后的电压（mV）
 static uint32_t adc_read_voltage_efuse(void) {
     int raw = 0;
-    ESP_ERROR_CHECK(adc_oneshot_read(s_adc_handle, ADC_CHANNEL_2, &raw));
+    ESP_ERROR_CHECK(adc_oneshot_read(s_adc_handle, ADC_CHANNEL_4, &raw));//ADC_CHANNEL_2
     int voltage_mv = 0;
     if (s_adc_cali_handle != NULL) {
         esp_err_t ret = adc_cali_raw_to_voltage(s_adc_cali_handle, raw, &voltage_mv);
@@ -158,21 +158,19 @@ static float calculate_humidity_percent(uint32_t volt_calibrated) {
 
 // 连续采集任务
 static void sensor_read_task(void *arg) {
-    MOISTURE_LOGI("Sensor reading task started, waiting 2s for sensor stabilization...");
+    MOISTURE_LOGI("Moisture sensor reading task started, waiting 2s for stabilization...");
     vTaskDelay(2000 / portTICK_PERIOD_MS);
 
     while (1) {
         if (!s_is_powered) {
-            MOISTURE_LOGI("Sensor power off, stop reading");
+            MOISTURE_LOGI("Moisture sensor power off, stop reading");
             break;
         }
-        // 读取eFuse电压
         uint32_t volt_efuse = adc_read_voltage_efuse();
-        // 应用二次校准
         uint32_t volt_cal = apply_secondary_calibration(volt_efuse);
         float hum = calculate_humidity_percent(volt_cal);
 
-        MOISTURE_LOGI("Voltage: %lu mV, Humidity: %.1f%%", volt_cal, hum);
+        MOISTURE_LOGI("Moisture sensor: Voltage=%lu mV, Humidity=%.1f%%", volt_cal, hum);
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
     s_read_task_handle = NULL;
@@ -190,22 +188,22 @@ void moisture_sensor_init(int power_pin, int adc_pin) {
 
 void moisture_sensor_power_on(void) {
     if (s_is_powered) {
-        MOISTURE_LOGW("Sensor already powered on");
+        MOISTURE_LOGW("Moisture sensor already powered on");
         return;
     }
     gpio_control_set_level(s_power_pin, true);
     s_is_powered = true;
-    MOISTURE_LOGI("Sensor power ON");
+    MOISTURE_LOGI("Moisture sensor power ON");
 }
 
 void moisture_sensor_power_off(void) {
     if (!s_is_powered) {
-        MOISTURE_LOGW("Sensor already powered off");
+        MOISTURE_LOGW("Moisture sensor already powered off");
         return;
     }
     gpio_control_set_level(s_power_pin, false);
     s_is_powered = false;
-    MOISTURE_LOGI("Sensor power OFF");
+    MOISTURE_LOGI("Moisture sensor power OFF");
     moisture_sensor_stop_reading();
 }
 
@@ -260,7 +258,7 @@ static bool collect_stable_samples_with_retry(float *raw_avg, float *volt_avg, i
         for (int i = 0; i < SAMPLE_COUNT; i++) {
             raw_buffer[i] = (int)adc_read_raw();
             volt_buffer[i] = (int)adc_read_voltage_efuse();
-            MOISTURE_LOGI("Sample %2d: raw=%4d, volt_efuse=%4d mV", i+1, raw_buffer[i], volt_buffer[i]);
+            ESP_LOGI(TAG, "Sample %2d: raw=%4d, volt_efuse=%4d mV", i+1, raw_buffer[i], volt_buffer[i]);
             vTaskDelay(1000 / portTICK_PERIOD_MS);
         }
 

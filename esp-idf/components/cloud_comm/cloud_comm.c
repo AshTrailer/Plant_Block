@@ -18,8 +18,8 @@
 static const char *TAG = "CLOUD_COMM";
 
 // WiFi 配置
-#define WIFI_SSID "S24"
-#define WIFI_PASS "12746088"
+#define WIFI_SSID "TP-Link_FE2F"    // S24
+#define WIFI_PASS "Qxrbtmp2x8gc127460"    //12746088
 
 // MQTT 配置
 #define MQTT_BROKER_URI "mqtts://aelecti.top:8883"

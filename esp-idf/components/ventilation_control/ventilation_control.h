@@ -24,4 +24,10 @@ bool ventilation_control_get_state(void);
 // 获取通风控制引脚号
 int ventilation_control_get_pin(void);
 
+// 获取当前通风开启时长（秒）
+int ventilation_control_get_on_seconds(void);
+
+// 获取当前通风关闭时长（秒）
+int ventilation_control_get_off_seconds(void);
+
 #endif

@@ -193,7 +193,7 @@ static bool sample_stable_humidity(float *humidity_avg, int max_retry) {
         // 采集样本
         for (int i = 0; i < SAMPLE_COUNT; i++) {
             humidity_samples[i] = (int)moisture_sensor_get_humidity_percent();
-            IRR_LOGI("样本 %d: %d%%", i+1, humidity_samples[i]);
+            ESP_LOGI(TAG, "样本 %d: %d%%", i+1, humidity_samples[i]);
             if (i < SAMPLE_COUNT - 1) {
                 vTaskDelay(1000 / portTICK_PERIOD_MS);
             }

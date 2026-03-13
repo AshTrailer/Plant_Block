@@ -22,7 +22,7 @@ static const char *TAG = "VENT_CTRL";
     cloud_comm_publish_log("[W] " fmt, ##__VA_ARGS__); \
 } while(0)
 
-// 默认通风周期（55分钟通风5分钟）-> 用于测试：20秒通风10秒
+// 默认通风周期（55分钟通风5分钟）
  #define DEFAULT_VENT_ON_SECONDS  300   // 通风5分钟 300 
  #define DEFAULT_VENT_OFF_SECONDS 3300  // 关闭55分钟 3300
 // 测试参数：
@@ -123,4 +123,12 @@ void ventilation_control_set_timing(int vent_on_seconds, int vent_off_seconds) {
     s_vent_off_seconds = vent_off_seconds;
     VENT_LOGI("Ventilation timing parameters updated: ON %d seconds, OFF %d seconds", 
              s_vent_on_seconds, s_vent_off_seconds);
+}
+
+int ventilation_control_get_on_seconds(void) {
+    return s_vent_on_seconds;
+}
+
+int ventilation_control_get_off_seconds(void) {
+    return s_vent_off_seconds;
 }

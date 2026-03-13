@@ -11,4 +11,5 @@ idf_component_register(
         irrigation_controller
         moisture_sensor
         cloud_comm
+        hmi_uart
 )

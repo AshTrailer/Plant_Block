@@ -50,6 +50,16 @@ static void print_command_help(void) {
     CMD_LOGI("--- 系统命令 ---");
     CMD_LOGI("help               - 显示此帮助");
     CMD_LOGI("module list        - 列出所有控制模块");
+
+    // 时间管理部分
+    CMD_LOGI("--- 时间管理 ---");
+    CMD_LOGI("time                  - 显示当前时间");
+    CMD_LOGI("time get              - 显示当前时间");
+    CMD_LOGI("time set Y/M/D H:M:S  - 设置系统时间");
+
+    // 通风控制部分
+    CMD_LOGI("--- 通风控制 ---");
+    CMD_LOGI("ventilation status      - 显示通风状态");
     
     // 浇水控制部分
     CMD_LOGI("--- 浇水控制 ---");
@@ -71,12 +81,6 @@ static void print_command_help(void) {
     CMD_LOGI("light off              - 手动关闭");
     CMD_LOGI("light auto             - 切换为自动模式");
     CMD_LOGI("light status           - 显示状态");
-    
-    // 时间管理部分
-    CMD_LOGI("--- 时间管理 ---");
-    CMD_LOGI("time                  - 显示当前时间");
-    CMD_LOGI("time get              - 显示当前时间");
-    CMD_LOGI("time set Y/M/D H:M:S  - 设置系统时间");
 
     // 土壤湿度传感器部分
     CMD_LOGI("--- 土壤湿度传感器 ---");
@@ -219,16 +223,25 @@ static void handle_irrigation_command(const char* command) {
             int week_min = irrigation_controller_get_week_min();
             int week_max = irrigation_controller_get_week_max();
             int week_count = irrigation_controller_get_week_count();
-            
-            CMD_LOGI("=== 浇水控制状态 ===");
-            CMD_LOGI("触发阈值: %d%%", threshold);
-            CMD_LOGI("单次浇水时长: %.1f秒", duration);
-            CMD_LOGI("周最小浇水次数: %d", week_min);
-            CMD_LOGI("周最大浇水次数: %d", week_max);
-            CMD_LOGI("本周已浇水次数: %d/%d", week_count, week_max);
-            CMD_LOGI("传感器电源状态: %s", 
-                    irrigation_controller_get_sensor_power_status() ? "开启" : "关闭");
-            CMD_LOGI("================");
+            bool sensor_power = irrigation_controller_get_sensor_power_status();
+
+            // 本地多行打印
+            ESP_LOGI(TAG, "=== 浇水控制状态 ===");
+            ESP_LOGI(TAG, "触发阈值: %d%%", threshold);
+            ESP_LOGI(TAG, "单次浇水时长: %.1f秒", duration);
+            ESP_LOGI(TAG, "周最小浇水次数: %d", week_min);
+            ESP_LOGI(TAG, "周最大浇水次数: %d", week_max);
+            ESP_LOGI(TAG, "本周已浇水次数: %d/%d", week_count, week_max);
+            ESP_LOGI(TAG, "传感器电源状态: %s", sensor_power ? "开启" : "关闭");
+            ESP_LOGI(TAG, "================");
+
+            // 云端单行发送
+            char status_buf[256];
+            snprintf(status_buf, sizeof(status_buf),
+                    "irrigation status: threshold=%d%%, duration=%.1fs, week_min=%d, week_max=%d, count=%d/%d, sensor_power=%s",
+                    threshold, duration, week_min, week_max, week_count, week_max,
+                    sensor_power ? "on" : "off");
+            cloud_comm_publish_log("%s", status_buf);
         }
         else {
             CMD_LOGI("未知的浇水控制命令，输入 'help' 查看帮助");
@@ -294,23 +307,63 @@ static void handle_light_command(const char* command) {
         float duration = light_control_get_duration();
         uint8_t pwm_duty = light_control_get_pwm_duty();
         light_state_t state = light_control_get_state();
-        
-        // 显示状态
-        CMD_LOGI("=== 补光灯状态 ===");
-        CMD_LOGI("开启时间: %02d:%02d", start_hour, start_minute);
-        CMD_LOGI("关闭时间: %02d:%02d", end_hour, end_minute);
-        CMD_LOGI("照明时长: %.1f小时", duration);
-        CMD_LOGI("当前状态: %s", 
-                 state == LIGHT_STATE_OFF ? "关闭" : 
-                 state == LIGHT_STATE_ON ? "开启(开关模式)" : "开启(PWM模式)");
-        CMD_LOGI("PWM占空比: %d%%", pwm_duty);
-        CMD_LOGI("模式: %s", light_control_is_manual_mode() ? "手动" : "自动");
-        CMD_LOGI("开关引脚: GPIO%d", light_control_get_pin());
-        CMD_LOGI("PWM引脚: GPIO%d", light_control_get_pwm_pin());
-        CMD_LOGI("================");
+        bool manual = light_control_is_manual_mode();
+        int control_pin = light_control_get_pin();
+        int pwm_pin = light_control_get_pwm_pin();
+
+        // 本地多行打印（保持可读性）
+        ESP_LOGI(TAG, "=== 补光灯状态 ===");
+        ESP_LOGI(TAG, "开启时间: %02d:%02d", start_hour, start_minute);
+        ESP_LOGI(TAG, "关闭时间: %02d:%02d", end_hour, end_minute);
+        ESP_LOGI(TAG, "照明时长: %.1f小时", duration);
+        ESP_LOGI(TAG, "当前状态: %s", 
+                state == LIGHT_STATE_OFF ? "关闭" : 
+                state == LIGHT_STATE_ON ? "开启(开关模式)" : "开启(PWM模式)");
+        ESP_LOGI(TAG, "PWM占空比: %d%%", pwm_duty);
+        ESP_LOGI(TAG, "模式: %s", manual ? "手动" : "自动");
+        ESP_LOGI(TAG, "开关引脚: GPIO%d", control_pin);
+        ESP_LOGI(TAG, "PWM引脚: GPIO%d", pwm_pin);
+        ESP_LOGI(TAG, "================");
+
+        // 云端单行发送（精简）
+        char status_buf[256];
+        snprintf(status_buf, sizeof(status_buf),
+                "light status: start=%02d:%02d, end=%02d:%02d, duration=%.1fh, state=%s, duty=%d%%, mode=%s, pins=%d/%d",
+                start_hour, start_minute, end_hour, end_minute, duration,
+                state == LIGHT_STATE_OFF ? "off" : (state == LIGHT_STATE_ON ? "on(switch)" : "on(pwm)"),
+                pwm_duty, manual ? "manual" : "auto", control_pin, pwm_pin);
+        cloud_comm_publish_log("%s", status_buf);
     }
     else {
         CMD_LOGI("未知的补光灯命令，输入 'help' 查看帮助");
+    }
+}
+
+// 处理通风命令
+static void handle_ventilation_command(const char* command) {
+    if (strcmp(command, "ventilation status") == 0) {
+        bool state = ventilation_control_get_state();
+        int pin = ventilation_control_get_pin();
+        int on_sec = ventilation_control_get_on_seconds();
+        int off_sec = ventilation_control_get_off_seconds();
+
+        // 本地多行打印
+        ESP_LOGI(TAG, "=== 通风控制状态 ===");
+        ESP_LOGI(TAG, "当前状态: %s", state ? "开启" : "关闭");
+        ESP_LOGI(TAG, "控制引脚: GPIO%d", pin);
+        ESP_LOGI(TAG, "开启时长: %d秒", on_sec);
+        ESP_LOGI(TAG, "关闭时长: %d秒", off_sec);
+        ESP_LOGI(TAG, "================");
+
+        // 云端单行发送
+        char status_buf[128];
+        snprintf(status_buf, sizeof(status_buf),
+                 "ventilation status: state=%s, pin=%d, on=%ds, off=%ds",
+                 state ? "on" : "off", pin, on_sec, off_sec);
+        cloud_comm_publish_log("%s", status_buf);
+    }
+    else {
+        CMD_LOGI("未知的通风命令，可用命令: ventilation status");
     }
 }
 
@@ -391,6 +444,12 @@ void command_processor_process_frame(const char* frame) {
     if (strncmp(frame, "moisture", 8) == 0) {
         handle_moisture_command(frame);
         return;
+    }
+
+    // 通风状态命令
+    if (strncmp(frame, "ventilation", 11) == 0) {
+        handle_ventilation_command(frame);
+    return;
     }
 
     // 未知命令

@@ -251,15 +251,14 @@ static bool sample_stable_humidity(float *humidity_avg, int max_retry) {
 
 // 浇水任务函数
 static void watering_task(void *arg) {
-    float duration = *(float *)arg;
-    
-    vTaskDelay(duration * 1000 / portTICK_PERIOD_MS);
+    uint32_t duration_ms = (uint32_t)(uintptr_t)arg;  // 从指针转换回毫秒
+    vTaskDelay(duration_ms / portTICK_PERIOD_MS);
     
     // 停止浇水
     gpio_control_set_level(s_config.pump_pin, false);
     s_state.is_watering = false;
     
-    IRR_LOGI("浇水完成，本次浇水 %.1f秒", duration);
+    IRR_LOGI("浇水完成，本次浇水 %.1f秒", duration_ms / 1000.0f);
     IRR_LOGI("本周已浇水次数: %d/%d", 
             s_state.week_water_count, s_config.week_max_times);
     
@@ -275,19 +274,18 @@ static void start_watering(void) {
     
     s_state.is_watering = true;
     s_state.week_water_count++;
-    s_state.last_water_time = time_manager_get_unix_time();  // 记录当前Unix时间
+    s_state.last_water_time = time_manager_get_unix_time();
     
-    // 开启水泵
     gpio_control_set_level(s_config.pump_pin, true);
     IRR_LOGI("开始浇水，时长: %.1f秒", s_config.water_duration);
     
-    // 创建浇水停止任务
-    float duration = s_config.water_duration;
+    // 将浮点秒数转换为毫秒整数，通过任务参数传递
+    uint32_t duration_ms = (uint32_t)(s_config.water_duration * 1000.0f);
     xTaskCreate(
         watering_task,
         "watering_task",
-        2048,
-        &duration,
+        3072,                     // 增大栈大小
+        (void*)(uintptr_t)duration_ms,  // 直接传递整数值
         2,
         NULL
     );
@@ -295,12 +293,11 @@ static void start_watering(void) {
 
 // 补浇水任务函数
 static void makeup_watering_task(void *arg) {
-    float total_duration = *(float *)arg;
-    
-    vTaskDelay(total_duration * 1000 / portTICK_PERIOD_MS);
+    uint32_t total_duration_ms = (uint32_t)(uintptr_t)arg;
+    vTaskDelay(total_duration_ms / portTICK_PERIOD_MS);
     
     gpio_control_set_level(s_config.pump_pin, false);
-    IRR_LOGI("补浇水完成，总时长 %.1f秒", total_duration);
+    IRR_LOGI("补浇水完成，总时长 %.1f秒", total_duration_ms / 1000.0f);
     
     vTaskDelete(NULL);
 }
@@ -336,7 +333,6 @@ static void handle_week_minimum_watering(void) {
     if (is_new_week()) {
         IRR_LOGI("新的一周开始，ISO周数: %d", s_state.current_week);
         
-        // 检查上周是否达到最小浇水次数
         int last_week_count = s_state.week_water_count;
         int required_min = s_config.week_min_times;
         
@@ -347,23 +343,22 @@ static void handle_week_minimum_watering(void) {
             IRR_LOGI("上周浇水 %d 次，未达到最小 %d 次，补浇 %d 次，总时长 %.1f秒",
                     last_week_count, required_min, deficit, total_duration);
             
-            // 补浇水（不计入本周计数）
-            s_state.week_water_count = 0; // 重置本周计数
+            s_state.week_water_count = 0;
             gpio_control_set_level(s_config.pump_pin, true);
             
-            // 创建补浇水任务
+            uint32_t total_duration_ms = (uint32_t)(total_duration * 1000.0f);
             xTaskCreate(
                 makeup_watering_task,
                 "makeup_watering_task",
-                2048,
-                &total_duration,
+                3072,                     // 同样增大栈
+                (void*)(uintptr_t)total_duration_ms,
                 2,
                 NULL
             );
         } else {
             IRR_LOGI("上周浇水 %d 次，达到最小 %d 次，无需补浇",
                     last_week_count, required_min);
-            s_state.week_water_count = 0; // 重置本周计数
+            s_state.week_water_count = 0;
         }
     }
 }

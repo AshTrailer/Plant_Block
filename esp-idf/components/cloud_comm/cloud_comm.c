@@ -156,9 +156,12 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
         case MQTT_EVENT_ERROR:
             ESP_LOGE(TAG, "MQTT error occurred");
             if (event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+                ESP_LOGE(TAG, "Transport error: %s", strerror(event->error_handle->esp_transport_sock_errno));
                 ESP_LOGE(TAG, "TLS error - check: 1.certificate 2.system time 3.firewall");
+            } else if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
+                ESP_LOGE(TAG, "Connection refused, return code: %d", event->error_handle->connect_return_code);
             }
-            break;
+        break;
 
         default:
             break;
@@ -213,7 +216,7 @@ static void mqtt_app_start(void)
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = MQTT_BROKER_URI,
         .broker.verification.certificate = server_cert,
-        .session.keepalive = 10,
+        .session.keepalive = 60,
         .credentials.client_id = DEVICE_ID,
         .session.last_will = {
             .topic = "registry/" DEVICE_ID "/status",

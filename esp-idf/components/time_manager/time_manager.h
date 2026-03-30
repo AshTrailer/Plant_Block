@@ -28,7 +28,10 @@ system_time_t time_manager_get_time(void);
 // 获取时间字符串（格式：YYYY/MM/DD HH:MM:SS）
 const char* time_manager_get_time_string(void);
 
-// 更新时间（供未来的网络同步模块调用）
+// 线程安全地获取时间字符串
+void time_manager_get_time_string_safe(char* buffer, size_t max_len);
+
+// 更新时间
 void time_manager_update_time(int year, int month, int day, int hour, int minute, int second);
 
 // 获取当前星期几（0=星期日，1=星期一，...，6=星期六）

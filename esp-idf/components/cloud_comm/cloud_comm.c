@@ -207,6 +207,9 @@ static void wifi_init_sta(void)
     } else {
         ESP_LOGE(TAG, "WiFi connection timeout");
     }
+
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    ESP_LOGI(TAG, "WiFi power save disabled");
 }
 
 // ------------------ 启动 MQTT ------------------
@@ -216,7 +219,7 @@ static void mqtt_app_start(void)
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = MQTT_BROKER_URI,
         .broker.verification.certificate = server_cert,
-        .session.keepalive = 60,
+        .session.keepalive = 30,
         .credentials.client_id = DEVICE_ID,
         .session.last_will = {
             .topic = "registry/" DEVICE_ID "/status",
@@ -289,8 +292,9 @@ void cloud_comm_publish_log(const char *format, ...)
         return; // 未连接时不发送
     }
 
-    // 获取当前时间字符串
-    const char *time_str = time_manager_get_time_string(); // 格式如 "2026/02/16 21:30:09 星期一"
+    // 使用线程安全的接口获取时间字符串
+    char time_str[64];
+    time_manager_get_time_string_safe(time_str, sizeof(time_str));
     
     char log_buf[512];
     int len = snprintf(log_buf, sizeof(log_buf), "[%s] ", time_str);

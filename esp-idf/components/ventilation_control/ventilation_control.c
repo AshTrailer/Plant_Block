@@ -44,12 +44,14 @@ static void ventilation_task(void *arg) {
              s_vent_on_seconds, s_vent_off_seconds);
 
     while (1) {
-        // 通风阶段：关闭
+        // 通风关闭阶段
+        s_current_state = false;
         VENT_LOGI("Ventilation OFF (GPIO%d -> LOW)", s_gpio_pin);
         gpio_control_set_level(s_gpio_pin, false);
         vTaskDelay(s_vent_off_seconds * 1000 / portTICK_PERIOD_MS);
 
-        // 通风阶段：开启
+        // 通风开启阶段
+        s_current_state = true;
         VENT_LOGI("Ventilation ON (GPIO%d -> HIGH)", s_gpio_pin);
         gpio_control_set_level(s_gpio_pin, true);
         vTaskDelay(s_vent_on_seconds * 1000 / portTICK_PERIOD_MS);
@@ -84,7 +86,7 @@ void ventilation_control_start(void) {
                 "ventilation_task",      // 任务名称
                 4096,                    // 堆栈大小
                 NULL,                    // 任务参数
-                5,                       // 任务优先级
+                2,                       // 任务优先级
                 &s_ventilation_task_handle); // 任务句柄
     
     if (s_ventilation_task_handle != NULL) {

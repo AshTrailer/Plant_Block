@@ -437,8 +437,8 @@ bool time_manager_set_time(int year, int month, int day, int hour, int minute, i
         
         xSemaphoreGive(s_time_mutex);
         
-        TIME_LOGI("Time set to: %s", s_time_string);
-        TIME_LOGI("Unix timestamp: %ld", s_current_time.unix_time);
+        ESP_LOGI(TAG, "Time set to: %s", s_time_string);
+        ESP_LOGI(TAG, "Unix timestamp: %ld", s_current_time.unix_time);
         return true;
     }
     
@@ -461,8 +461,8 @@ bool time_manager_set_time_from_unix(time_t unix_time) {
         
         xSemaphoreGive(s_time_mutex);
         
-        TIME_LOGI("Time set from Unix timestamp: %s", s_time_string);
-        TIME_LOGI("Unix timestamp: %ld", s_current_time.unix_time);
+        ESP_LOGI(TAG, "Time set from Unix timestamp: %s", s_time_string);
+        ESP_LOGI(TAG, "Unix timestamp: %ld", s_current_time.unix_time);
         return true;
     }
     
@@ -498,11 +498,24 @@ const char* time_manager_get_time_string(void) {
     return s_time_string;
 }
 
-// 更新时间（供未来的网络同步模块调用）
+// 线程安全地获取时间字符串
+void time_manager_get_time_string_safe(char* buffer, size_t max_len) {
+    if (buffer == NULL || max_len == 0) return;
+    
+    if (xSemaphoreTake(s_time_mutex, portMAX_DELAY) == pdTRUE) {
+        strncpy(buffer, s_time_string, max_len - 1);
+        buffer[max_len - 1] = '\0';
+        xSemaphoreGive(s_time_mutex);
+    } else {
+        buffer[0] = '\0';
+    }
+}
+
+// 更新时间
 void time_manager_update_time(int year, int month, int day, int hour, int minute, int second) {
     // 直接调用设置函数，确保边界检查
     time_manager_set_time(year, month, day, hour, minute, second);
-    TIME_LOGI("当前时间: %s", time_manager_get_time_string());
+    ESP_LOGI(TAG, "当前时间: %s", time_manager_get_time_string());
 }
 
 // 获取当前星期几（0=星期日，1=星期一，...，6=星期六）

@@ -44,3 +44,6 @@ Data Processing – outlier removal, mean, standard deviation, stability check
 Hardware: Cadence schematic, footprint, and first PCB prototype have been fabricated – awaiting testing
 
 Software: Core functions are complete; next step is upgrading to a 4‑channel version (supporting independent control of 4 plant modules)
+
+<img width="1103" height="1051" alt="92994e99e9851de65859d0994ca0367" src="https://github.com/user-attachments/assets/e26dbbd2-c406-47df-9ab2-72ccef3995f8" />
+<img width="1098" height="1063" alt="f88b9a7ae5009c51f814155c0ea91d6" src="https://github.com/user-attachments/assets/67e4706a-3f06-4ab7-864e-ef8576fc715b" />

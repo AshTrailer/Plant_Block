@@ -24,7 +24,8 @@ static const char *TAG = "GPIO_CONTROL";
 
 // 初始化时配置的GPIO引脚列表
 //static const int s_managed_pins[] = {1, 3, 4, 5, 6, 7, 8, 9, 14, 15, 18};
-static const int s_managed_pins[] = {32,5,12,14,15,18};
+static const int s_managed_pins[] = {2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23,
+                                            25, 26, 27, 32, 33, 34, 35};
 static const int s_managed_pin_count = sizeof(s_managed_pins) / sizeof(s_managed_pins[0]);
 
 // 检查引脚号是否在受管理的列表中
@@ -71,7 +72,6 @@ void gpio_control_init(void) {
     }
     
     GPIO_LOGI("GPIO Control Module Initialization Complete");
-    GPIO_LOGI("Available Pins: 1, 3, 4, 5, 6, 7, 8, 9, 14, 15, 18");
 }
 
 // 控制指定GPIO引脚的电平

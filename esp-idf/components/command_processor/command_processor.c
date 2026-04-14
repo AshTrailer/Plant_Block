@@ -40,8 +40,6 @@ static module_info_t s_module_list[] = {
     {"pump", "浇水控制", 5},
 };
 
-static const int s_module_count = sizeof(s_module_list) / sizeof(s_module_list[0]);
-
 // 打印完整命令帮助
 static void print_command_help(void) {
     CMD_LOGI("=== 完整命令帮助 ===");
@@ -112,12 +110,10 @@ static void handle_module_list(void) {
     
     // 补光灯控制模块（light）
     bool light_state = light_control_is_on();
-    int light_pin = light_control_get_pin();
-    int pwm_pin = light_control_get_pwm_pin();
+    int pwm_pin = light_control_get_pwm_pin(0);  // 获取第一个PWM引脚
     CMD_LOGI("%-12s %-8s  GPIO%d/GPIO%d",
              "light",
-             light_state ? "ON" : "OFF",
-             light_pin, pwm_pin);
+             light_state ? "ON" : "OFF", pwm_pin);
     
     // 浇水控制模块（irrigation）
     int irrigation_pin = 15;  // GPIO15
@@ -308,8 +304,7 @@ static void handle_light_command(const char* command) {
         uint8_t pwm_duty = light_control_get_pwm_duty();
         light_state_t state = light_control_get_state();
         bool manual = light_control_is_manual_mode();
-        int control_pin = light_control_get_pin();
-        int pwm_pin = light_control_get_pwm_pin();
+        int pwm_pin = light_control_get_pwm_pin(0);  // 获取第一个PWM引脚
 
         // 本地多行打印（保持可读性）
         ESP_LOGI(TAG, "=== 补光灯状态 ===");
@@ -321,17 +316,16 @@ static void handle_light_command(const char* command) {
                 state == LIGHT_STATE_ON ? "开启(开关模式)" : "开启(PWM模式)");
         ESP_LOGI(TAG, "PWM占空比: %d%%", pwm_duty);
         ESP_LOGI(TAG, "模式: %s", manual ? "手动" : "自动");
-        ESP_LOGI(TAG, "开关引脚: GPIO%d", control_pin);
         ESP_LOGI(TAG, "PWM引脚: GPIO%d", pwm_pin);
         ESP_LOGI(TAG, "================");
 
         // 云端单行发送（精简）
         char status_buf[256];
         snprintf(status_buf, sizeof(status_buf),
-                "light status: start=%02d:%02d, end=%02d:%02d, duration=%.1fh, state=%s, duty=%d%%, mode=%s, pins=%d/%d",
+                "light status: start=%02d:%02d, end=%02d:%02d, duration=%.1fh, state=%s, duty=%d%%, mode=%s, pins=%d",
                 start_hour, start_minute, end_hour, end_minute, duration,
                 state == LIGHT_STATE_OFF ? "off" : (state == LIGHT_STATE_ON ? "on(switch)" : "on(pwm)"),
-                pwm_duty, manual ? "manual" : "auto", control_pin, pwm_pin);
+                pwm_duty, manual ? "manual" : "auto", pwm_pin);
         cloud_comm_publish_log("%s", status_buf);
     }
     else {
@@ -389,7 +383,7 @@ static void handle_time_command(const char* command) {
             CMD_LOGI("正确格式: time set YYYY/MM/DD HH:MM:SS");
             CMD_LOGI("示例: time set 2025/02/05 14:30:00");
         }
-    } else if (strcmp(command, "time") == 0 || strcmp(command, "time get") == 0) {
+    } else if (strcmp(command, "time") == 0) {
         // 查询当前时间
         CMD_LOGI("当前时间: %s", time_manager_get_time_string());
     } else {
@@ -400,7 +394,6 @@ static void handle_time_command(const char* command) {
 // 初始化函数
 void command_processor_init(void) {
     CMD_LOGI("命令处理器初始化完成");
-    CMD_LOGI("系统模块数量: %d", s_module_count);
     print_command_help();
 }
 

@@ -12,8 +12,11 @@ typedef enum {
    LIGHT_STATE_PWM      // PWM模式
 } light_state_t;
 
-// 初始化补光灯控制模块
-void light_control_init(int pwm_pin);
+// 定义通道数量
+#define LIGHT_CHANNEL_COUNT 4
+
+// 初始化补光灯控制模块（四通道）
+void light_control_init(const int pwm_pins[LIGHT_CHANNEL_COUNT], int fan_pin);
 
 // 补光灯状态轮询函数（需在主循环中定期调用）
 void light_control_poll(void);
@@ -63,7 +66,10 @@ float light_control_get_duration(void);
 // 获取当前PWM占空比
 uint8_t light_control_get_pwm_duty(void);
 
-// 获取PWM控制引脚号
-int light_control_get_pwm_pin(void);
+// 获取指定通道的PWM控制引脚号
+int light_control_get_pwm_pin(int channel);
+
+// 获取散热风扇引脚的函数
+int light_control_get_fan_pin(void);
 
 #endif

@@ -16,17 +16,15 @@
 
 #define HMI_UART_TX_PIN 16
 #define HMI_UART_RX_PIN 17
-#define MOISTURE_SENSOR_POWER_PIN 15
+#define MOISTURE_SENSOR_POWER_PIN 33
 #define MOISTURE_SENSOR_ADC_PIN 32
 #define VENTILATION_CONTROL_PIN 13
-#define IRRIGATION_CONTROL_PIN 18
-#define LIGHT_POWER_PIN 12
-#define LIGHT_PWM_PIN 14
-
-/*
-static time_t last_heartbeat = 0;
-static time_t start_time = 0; // 在初始化后记录
-*/
+#define IRRIGATION_CONTROL_PIN 23
+#define LIGHT_PWM_PIN1 4
+#define LIGHT_PWM_PIN2 16
+#define LIGHT_PWM_PIN3 18
+#define LIGHT_PWM_PIN4 17
+#define LIGHT_FAN_PIN 15
 
 void app_main(void) {
     ESP_LOGI("MAIN", "System starting, initializing components...");
@@ -58,7 +56,7 @@ void app_main(void) {
     ventilation_control_start();
 
     ESP_LOGI("MAIN", "Initializing Light Control...");
-    light_control_init(LIGHT_POWER_PIN, LIGHT_PWM_PIN);
+    light_control_init((const int[]){LIGHT_PWM_PIN1, LIGHT_PWM_PIN2, LIGHT_PWM_PIN3, LIGHT_PWM_PIN4}, LIGHT_FAN_PIN);
 
     ESP_LOGI("MAIN", "Initializing Irrigation Controller...");
     irrigation_controller_init(IRRIGATION_CONTROL_PIN);

@@ -1,101 +1,125 @@
-2026年4月10日更新
-Plant Block
-Plant Block：基于 ESP32 实现环境监测与自动控制（通风、补光、浇水），支持本地串口调试、云端 MQTT 远程监控及串口屏本地交互。项目持续升级中。
+# Plant Block - 智能植物养护系统
 
-Plant Block: Plant module based on ESP32 for environmental monitoring and automatic control (ventilation, supplemental lighting, watering). It features local serial debugging, cloud MQTT remote monitoring, and serial touch screen interaction. Continuously under active development.
+基于 ESP32 的环境监测与自动控制系统，支持通风、补光、浇水等核心功能，具备本地串口调试、云端 MQTT 远程监控能力。
 
-功能模块 / Modules
-通风控制 – 定时启停风扇
+## 项目升级日志
 
-补光灯控制 – PWM 智能调光（自动渐亮/渐暗）
+### 2026年4月15日更新 - 第二版开发预告
+第二版硬件正在规划设计中，将进行多项重大升级，提升系统性能和扩展性。
 
-智能浇水 – 基于土壤湿度阈值、4 小时防重复、周计划管理
+### 2026年3月更新 - 第一版完成
+第一版硬件已完成设计、打样，软件核心功能开发完毕，升级为 4 通道版本。
 
-时间管理 – 软件计时、Unix 时间戳、ISO 周数、星期计算
+---
 
-命令解析器 – 非阻塞串口命令，完整调试接口
+## 第一版硬件设计 (v1.0)
 
-云端通信 – WiFi 连接 + MQTT over TLS（设备状态上报、远程命令下发、遗嘱消息）
+### 硬件架构
 
-串口屏交互 – 淘晶驰串口屏数值上报与本地控制
+#### 电源系统
+输入：12V DC
+├── TPS54302DDCR：12V → 5V 降压转换
+├── PT4115：LED 恒流驱动 (4通道)
+└── 各模块供电分配
 
-数据处理 – 去极值、均值、标准差、稳定性判断
+#### 控制通道配置
+| 模块类型 | 设计预留 | 实际可用 | 原因说明 |
+|----------|----------|----------|----------|
+| **光照控制** | 4 通道 | 4 通道 | 每通道 3W，总计 12W |
+| **水泵控制** | 4 个 | 1 个 | PCB 设计时 GPIO 端口分配错误 |
+| **传感器接口** | 4 个 | 1 个 | PCB 设计时 GPIO 端口分配错误 |
 
-Ventilation – timed fan control
+#### 核心功能模块
+1. **通风控制** - 定时启停风扇
+2. **补光灯控制** - PWM 智能调光（自动渐亮/渐暗）
+3. **LED散热控制** - 独立散热管理
+4. **智能浇水** - 基于土壤湿度阈值、4 小时防重复、周计划管理
+5. **时间管理** - 软件计时、Unix 时间戳、ISO 周数、星期计算
+6. **命令解析器** - 非阻塞串口命令，完整调试接口
+7. **云端通信** - WiFi 连接 + MQTT over TLS（设备状态上报、远程命令下发、遗嘱消息）
+8. **数据处理** - 去极值、均值、标准差、稳定性判断
 
-Supplemental Light – PWM dimming with auto ramp-up/down
+> **注**：串口屏交互功能暂未开发，将在后续版本中实现。
 
-Smart Watering – soil moisture threshold, 4‑hour cooldown, weekly plan
+#### 硬件图片
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/ba24fef7-72bb-4d3b-9d40-662109841446" width="400" alt="第一版电路板正面">
+</div>
 
-Time Management – software RTC, Unix timestamp, ISO week number, weekday
+<div align="center">
+  <img src="https://github.com/user-attachments/assets/e26dbbd2-c406-47df-9ab2-72ccef3995f8" width="400" alt="系统框图">
+  <img src="https://github.com/user-attachments/assets/67e4706a-3f06-4ab7-864e-ef8576fc715b" width="400" alt="电气组件图">
+</div>
 
-Command Parser – non‑blocking serial commands, full debugging interface
+#### 当前进展
+- **硬件**：Cadence 原理图、封装、初版 PCB 已完成并打样，等待测试
+- **软件**：核心功能已完成，升级为 4 通道版本（支持独立控制 4 个植物模块）
 
-Cloud Communication – WiFi + MQTT over TLS (status reporting, remote commands, last will)
+---
 
-HMI Interface – DWIN serial touch screen data reporting and local control
+## 第二版升级规划 (v2.0)
 
-Data Processing – outlier removal, mean, standard deviation, stability check
+### 主要升级内容
 
-当前进展 / Current Status
-硬件：Cadence 原理图、封装、初版 PCB 已完成并打样，等待测试
+#### 1. 电源系统升级
+| 项目 | 第一版 | 第二版 | 升级说明 |
+|------|--------|--------|----------|
+| **输入电源** | 12V 5A | 24V 5A | 提升输入电压，减少电流损耗 |
+| **DC-DC降压链** | 单级降压 | 多级降压 | 24V → 12V → 5V → 3V3分级供电 |
 
-软件：核心功能已完成，即将升级为 4 通道版本（支持独立控制 4 个植物模块）
+**详细电源架构：**
+- **24V → 12V**：供 TEC、风扇、水泵（选型 TPS54538 或 LM2596HV，输出电流 ≥3A）
+- **12V/24V → 5V**：供 ESP32、传感器（TPS56339 或 LM2596-5.0）
 
-Hardware: Cadence schematic, footprint, and first PCB prototype have been fabricated – awaiting testing
+#### 2. 光照模块重构
+| 项目 | 第一版 | 第二版 | 升级说明 |
+|------|--------|--------|----------|
+| **LED类型** | 4x3W 分立 LED | 50W COB 灯板 | 集成度高，散热更好 |
+| **驱动方式** | PT4115 恒流驱动 | Boost 升压驱动 | 采用 XL6005 或 OC3002 |
+| **散热控制** | ESP32 GPIO 控制 | 电路自启动 | 增加可靠性 |
 
-Software: Core functions are complete; next step is upgrading to a 4‑channel version (supporting independent control of 4 plant modules)
+**LED散热自启动电路：**
+PWM信号 → 高速光耦(6N137/TLP2361) → RC滤波 → 施密特触发器 → MOSFET(AO3400)
+- 增加正反馈形成死区
+- LED工作即自动启动散热
+- 无需 ESP32 额外控制
 
-<img width="1103" height="1051" alt="92994e99e9851de65859d0994ca0367" src="https://github.com/user-attachments/assets/e26dbbd2-c406-47df-9ab2-72ccef3995f8" />
-<img width="1098" height="1063" alt="f88b9a7ae5009c51f814155c0ea91d6" src="https://github.com/user-attachments/assets/67e4706a-3f06-4ab7-864e-ef8576fc715b" />
+#### 3. 新增TEC温控系统
+| 组件 | 型号/参数 | 功能说明 |
+|------|-----------|----------|
+| **TEC模块** | TEC1-12706 | 12V/6A max（实际使用 ≤3A） |
+| **驱动方式** | H桥驱动 | MOSFET分立或集成IC（如DRV8870），支持PWM调速 |
+| **电流采样** | ACS712-5A | 霍尔传感器，5V供电，模拟输出接ADC |
+| **温度采样** | DS18B20 x2 | 两路单总线，分别监测冷面和热面温度 |
+| **控制算法** | 双闭环PID | 温度环 + 电流环联合控制 |
 
-2025年11月更新
-Plant Block：基于 ESP32 实现环境监测与自动控制（通风、补光、浇水），支持本地串口调试、云端 MQTT 远程监控及串口屏本地交互。项目持续升级中。
+#### 4. 传感器与接口升级
+| 升级项目 | 具体内容 | 目的 |
+|----------|----------|------|
+| **环境监测** | 新增 SHT30 | 高精度环境温湿度监控 |
+| **液位检测** | 浮球开关或超声波传感器 | 水箱液位监测 |
+| **湿度调节** | 雾化器控制 | 整体环境湿度调节 |
+| **通信接口** | 尝试加入 RS485 | 增强通信距离和抗干扰能力 |
+| **PCB设计** | 升级为 4 层板 | 改善信号完整性和EMC性能 |
 
-Plant Block：30×30×60 mm 简易 3D 打印植物模块，结合 Arduino 自动监测环境温湿度和土壤湿度进行自助浇水，项目持续升级中。
-Plant Block: Plant module based on ESP32 for environmental monitoring and automatic control (ventilation, supplemental lighting, watering). It features local serial debugging, cloud MQTT remote monitoring, and serial touch screen interaction. Continuously under active development.
+#### 5. 软件功能优化
+| 模块 | 第一版 | 第二版优化 |
+|------|--------|------------|
+| **土壤湿度传感器** | SS8050 控制 | 去掉 SS8050，GPIO直接控制，避免三极管半导通状态腐蚀传感器 |
+| **通风控制** | 固定 5分钟开/55分钟关 | 升级为可配置的智能控制 |
+| **串口屏** | 未开发 | 暂不开发，先定硬件再实现 |
 
-Plant Block: A 30×30×60 mm simple 3D-printed plant module with Arduino-based monitoring of air and soil humidity and automatic self-watering, currently under active development.
-功能模块 / Modules
-通风控制 – 定时启停风扇
+## 项目持续开发中
 
-![Overall Block Struct](https://github.com/user-attachments/assets/33ce66a8-7f14-4820-b882-5774e183f363)
-![Overall Electrical Components](https://github.com/user-attachments/assets/7ace10a7-a562-42b0-9e68-cb6ab06a2fb1)
-补光灯控制 – PWM 智能调光（自动渐亮/渐暗）
+Plant Block 项目将持续迭代升级，致力于打造更智能、更可靠的植物自动养护系统。欢迎关注项目进展并提出宝贵建议！
 
-智能浇水 – 基于土壤湿度阈值、4 小时防重复、周计划管理
+> **项目状态**：第一版硬件测试中，第二版设计规划中
+> **开发环境**：ESP32 + ESP-IDF，Cadence 硬件设计
 
-时间管理 – 软件计时、Unix 时间戳、ISO 周数、星期计算
 
-命令解析器 – 非阻塞串口命令，完整调试接口
 
-云端通信 – WiFi 连接 + MQTT over TLS（设备状态上报、远程命令下发、遗嘱消息）
 
-串口屏交互 – 淘晶驰串口屏数值上报与本地控制
 
-数据处理 – 去极值、均值、标准差、稳定性判断
 
-Ventilation – timed fan control
 
-Supplemental Light – PWM dimming with auto ramp-up/down
 
-Smart Watering – soil moisture threshold, 4‑hour cooldown, weekly plan
-
-Time Management – software RTC, Unix timestamp, ISO week number, weekday
-
-Command Parser – non‑blocking serial commands, full debugging interface
-
-Cloud Communication – WiFi + MQTT over TLS (status reporting, remote commands, last will)
-
-HMI Interface – DWIN serial touch screen data reporting and local control
-
-Data Processing – outlier removal, mean, standard deviation, stability check
-
-当前进展 / Current Status
-硬件：Cadence 原理图、封装、初版 PCB 已完成并打样，等待测试
-
-软件：核心功能已完成，即将升级为 4 通道版本（支持独立控制 4 个植物模块）
-
-Hardware: Cadence schematic, footprint, and first PCB prototype have been fabricated – awaiting testing
-
-Software: Core functions are complete; next step is upgrading to a 4‑channel version (supporting independent control of 4 plant modules)

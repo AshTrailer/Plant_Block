@@ -1,0 +1,36 @@
+# Changelog
+
+## 0.1.5 - 2026-5-29
+
+- Added error check to the task acquisition and event post
+- Propagated acquisition errors to the task
+
+## 0.1.4 - 2026-1-23
+
+- Fix GPIO driver component requirement in CMake for newer ESP-IDF versions
+
+## v0.1.3 - 2025-9-11
+
+### Bug Fixes:
+
+- Fix compilation issue of `iot_sensor_hub` when using c++
+
+## v0.1.2 - 2025-3-12
+
+### Bug Fixes:
+
+- Fix alignment issue of `sensors_detect` target in sensor_hub linker fragment file
+
+## v0.1.1 - 2024-12-24
+
+### Bug Fixes:
+
+- Fix the missing repository link in the `sensor_hub` component yml and update the example in README.md
+
+## v0.1.0 - 2024-12-6
+
+First release version
+
+### Enhancements:
+
+- Support user to register sensor driver into `sensor_hub` as a component

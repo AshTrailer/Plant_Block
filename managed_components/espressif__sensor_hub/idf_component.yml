@@ -1,0 +1,15 @@
+dependencies:
+  cmake_utilities: 0.*
+  i2c_bus:
+    public: true
+    version: 1.*
+  idf: '>=4.4'
+description: Unified Framework for Sensor Management
+documentation: https://docs.espressif.com/projects/esp-iot-solution/en/latest/sensors/sensor_hub.html
+issues: https://github.com/espressif/esp-iot-solution/issues
+repository: git://github.com/espressif/esp-iot-solution.git
+repository_info:
+  commit_sha: 38a2ed9125f30903a490760381fa0ca8f1e2ec81
+  path: components/sensors/sensor_hub
+url: https://github.com/espressif/esp-iot-solution/tree/master/components/sensors/sensor_hub
+version: 0.1.5

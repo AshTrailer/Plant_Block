@@ -185,7 +185,7 @@ static void ds18b20_worker_task(void *arg)
    }
 }
 
-// ---------- 周期定时器回调（极轻量）----------
+// ---------- 周期定时器回调 ----------
 static void periodic_timer_cb(TimerHandle_t timer)
 {
    if (s_worker_task != NULL && !s_continuous_mode) {

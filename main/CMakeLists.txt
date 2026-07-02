@@ -14,4 +14,5 @@ idf_component_register(
         hmi_uart
         ds18b20_sensor
         sht30_sensor
+        float_switch
 )

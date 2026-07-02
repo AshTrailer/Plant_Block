@@ -15,6 +15,7 @@
 #include "hmi_uart.h"
 #include "ds18b20_sensor.h"
 #include "sht30_sensor.h"
+#include "float_switch.h"
 
 #define HMI_UART_TX_PIN 16
 #define HMI_UART_RX_PIN 17
@@ -57,13 +58,17 @@ void app_main(void) {
     //ESP_LOGI("MAIN", "Initializing Moisture Sensor...");
     //moisture_sensor_init(MOISTURE_SENSOR_POWER_PIN, MOISTURE_SENSOR_ADC_PIN); 
     
-    ESP_LOGI("MAIN", "Initializing DS18B20 Sensor...");
-    ds18b20_sensor_init(DS18B20_BUS_GPIO, DS18B20_MAX_COUNT);
-    ds18b20_sensor_start_continuous();
+    //ESP_LOGI("MAIN", "Initializing DS18B20 Sensor...");
+    //ds18b20_sensor_init(DS18B20_BUS_GPIO, DS18B20_MAX_COUNT);
+    //ds18b20_sensor_start_continuous();
 
-    ESP_LOGI("MAIN", "Initializing SHT30 Sensor...");
-    sht30_sensor_init(SHT30_SDA_PIN, SHT30_SCL_PIN);
-    sht30_sensor_start();
+    //ESP_LOGI("MAIN", "Initializing SHT30 Sensor...");
+    //sht30_sensor_init(SHT30_SDA_PIN, SHT30_SCL_PIN);
+    //sht30_sensor_start();
+
+    ESP_LOGI("MAIN", "Initializing Float Switch...");
+    float_switch_init(35);
+    float_switch_start_monitor(500);
 
     //ESP_LOGI("MAIN", "Initializing Ventilation Control...");
     //ventilation_control_init(VENTILATION_CONTROL_PIN);

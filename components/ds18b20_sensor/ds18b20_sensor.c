@@ -36,12 +36,16 @@ static onewire_bus_handle_t      s_bus = NULL;
 static ds18b20_device_handle_t   s_devices[DS18B20_MAX_DEVICES];
 static int                       s_device_count = 0;
 
-// 工作线程（所有实际总线操作在此任务中执行）
+// 工作线程
 static TaskHandle_t              s_worker_task = NULL;
 
-// 周期定时器（回调极轻量：仅通知 worker task）
+// 周期定时器
 static TimerHandle_t             s_periodic_timer = NULL;
 static uint32_t                  s_period_ms = 5000;
+
+// 运行模式
+static volatile bool             s_continuous_mode = false;   // true: 自循环最快模式
+static volatile bool             s_running = false;           // 采集是否运行中
 
 // 单次异步回调暂存
 static ds18b20_temp_cb_t         s_once_callback = NULL;
@@ -67,40 +71,58 @@ static void read_all_and_notify(ds18b20_temp_cb_t callback, void *user_ctx)
    }
 }
 
+// ---------- 执行一次完整的"触发 → 等待 → 读取"循环 ----------
+static void do_one_cycle(void)
+{
+   esp_err_t err = ds18b20_trigger_temperature_conversion_for_all(s_bus);
+   if (err != ESP_OK) {
+      DS18B20_LOGE("Worker: trigger conversion failed (err=%d)", err);
+      return;
+   }
+
+   // 等待转换完成（只阻塞本任务）
+   vTaskDelay(pdMS_TO_TICKS(DS18B20_CONV_DELAY_MS));
+
+   // 消费一次性回调（如果有的话），否则用 NULL 只打日志
+   ds18b20_temp_cb_t cb = s_once_callback;
+   void *ctx = s_once_user_ctx;
+   s_once_callback = NULL;
+   s_once_user_ctx = NULL;
+
+   read_all_and_notify(cb, ctx);
+}
+
 // ---------- 工作线程 ----------
 static void ds18b20_worker_task(void *arg)
 {
    DS18B20_LOGI("Worker task started, waiting for trigger...");
 
    while (1) {
-      // 等待通知（来自周期定时器或 read_once_async）
-      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-      // 1. 触发总线上所有设备开始温度转换
-      esp_err_t err = ds18b20_trigger_temperature_conversion_for_all(s_bus);
-      if (err != ESP_OK) {
-         DS18B20_LOGE("Worker: trigger conversion failed (err=%d)", err);
-         continue;
+      if (s_continuous_mode) {
+         // ========== 连续模式：自循环，最快速度 ==========
+         while (s_continuous_mode) {
+            do_one_cycle();
+         }
+         // 退出连续模式后，回到等待通知状态
+         DS18B20_LOGI("Continuous mode stopped, back to idle");
       }
 
-      // 2. 等待转换完成（在独立任务中 vTaskDelay 只阻塞本任务，不影响其他任务）
-      vTaskDelay(pdMS_TO_TICKS(DS18B20_CONV_DELAY_MS));
+      // ========== 周期模式 / 空闲：等待通知 ==========
+      // 清空积压通知后等待下一个
+      ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-      // 3. 读取并通知
-      ds18b20_temp_cb_t cb = s_once_callback;
-      void *ctx = s_once_user_ctx;
-      s_once_callback = NULL;   // 一次性消费
-      s_once_user_ctx = NULL;
-
-      read_all_and_notify(cb, ctx);
+      // 收到通知但可能已被切到连续模式（竞态），此时跳过单次执行
+      if (!s_continuous_mode) {
+         do_one_cycle();
+      }
    }
 }
 
-// ---------- 周期定时器回调（极轻量：只通知 worker task）----------
+// ---------- 周期定时器回调（极轻量）----------
 static void periodic_timer_cb(TimerHandle_t timer)
 {
-   // 仅在 worker task 已创建时通知
-   if (s_worker_task != NULL) {
+   if (s_worker_task != NULL && !s_continuous_mode) {
+      // 连续模式下周期定时器不参与，避免无效通知
       xTaskNotifyGive(s_worker_task);
    }
 }
@@ -118,9 +140,7 @@ void ds18b20_sensor_init(int gpio_num, int max_devices)
    // --- 1. 安装 1-Wire 总线（RMT 后端）---
    onewire_bus_config_t bus_config = {
       .bus_gpio_num = gpio_num,
-      .flags = {
-         .en_pull_up = false,
-      }
+      .flags = { .en_pull_up = false }
    };
    onewire_bus_rmt_config_t rmt_config = {
       .max_rx_bytes = 10,
@@ -184,14 +204,15 @@ void ds18b20_sensor_init(int gpio_num, int max_devices)
       &s_worker_task
    );
 
-   // --- 4. 创建周期定时器（不启动，由 start_reading 启动）---
+   // --- 4. 创建周期定时器（不启动）---
    s_periodic_timer = xTimerCreate(
       "ds18b20_periodic",
       pdMS_TO_TICKS(s_period_ms),
-      pdTRUE,     // 自动重载
+      pdTRUE,
       NULL,
       periodic_timer_cb
    );
+
    DS18B20_LOGI("DS18B20 sensor module initialized");
 }
 
@@ -243,8 +264,10 @@ void ds18b20_sensor_read_once_async(ds18b20_temp_cb_t callback, void *user_ctx)
    s_once_callback = callback;
    s_once_user_ctx = user_ctx;
 
-   // 通知 worker task 执行一次转换+读取
-   xTaskNotifyGive(s_worker_task);
+   if (!s_continuous_mode) {
+      xTaskNotifyGive(s_worker_task);
+   }
+   // 连续模式下不需要发通知，下一次循环会自动消费 s_once_callback
 }
 
 void ds18b20_sensor_trigger_conversion(void)
@@ -267,6 +290,7 @@ bool ds18b20_sensor_get_device_address_str(int index, char *buffer, size_t len)
    return true;
 }
 
+// ---------- 周期采集 ----------
 void ds18b20_sensor_start_reading(uint32_t interval_ms)
 {
    if (s_device_count == 0) {
@@ -274,22 +298,51 @@ void ds18b20_sensor_start_reading(uint32_t interval_ms)
       return;
    }
 
-   if (interval_ms < DS18B20_CONV_DELAY_MS + 500) {
-      interval_ms = DS18B20_CONV_DELAY_MS + 500;
-      DS18B20_LOGW("Interval too short, adjusted to %lu ms", (unsigned long)interval_ms);
+   // 退出连续模式（如果在其中）
+   s_continuous_mode = false;
+
+   // 最小间隔 = 转换时间 + 少量通信余量
+   if (interval_ms < DS18B20_CONV_DELAY_MS + 20) {
+      interval_ms = DS18B20_CONV_DELAY_MS + 20;
+      DS18B20_LOGW("Interval too short, adjusted to %lu ms (min for 11-bit)",
+                   (unsigned long)interval_ms);
    }
 
    s_period_ms = interval_ms;
+   s_running = true;
 
    xTimerChangePeriod(s_periodic_timer, pdMS_TO_TICKS(s_period_ms), 0);
    xTimerStart(s_periodic_timer, 0);
 
-   DS18B20_LOGI("Continuous reading started (interval: %lu ms, non-blocking)",
-                (unsigned long)s_period_ms);
+   DS18B20_LOGI("Periodic reading started (interval: %lu ms)", (unsigned long)s_period_ms);
+}
+
+// ---------- 最快连续采集 ----------
+void ds18b20_sensor_start_continuous(void)
+{
+   if (s_device_count == 0) {
+      DS18B20_LOGE("Cannot start continuous: no DS18B20 devices");
+      return;
+   }
+
+   // 停止周期定时器（连续模式不需要它）
+   xTimerStop(s_periodic_timer, 0);
+
+   s_running = true;
+   s_continuous_mode = true;
+
+   // 唤醒 worker（如果它在等待通知）
+   if (s_worker_task != NULL) {
+      xTaskNotifyGive(s_worker_task);
+   }
+
+   DS18B20_LOGI("Continuous fastest reading started (~%d ms/cycle)", DS18B20_CONV_DELAY_MS);
 }
 
 void ds18b20_sensor_stop_reading(void)
 {
+   s_continuous_mode = false;
+   s_running = false;
    xTimerStop(s_periodic_timer, 0);
-   DS18B20_LOGI("Continuous reading stopped");
+   DS18B20_LOGI("Reading stopped");
 }

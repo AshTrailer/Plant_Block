@@ -57,7 +57,7 @@ void app_main(void) {
     
     ESP_LOGI("MAIN", "Initializing DS18B20 Sensor...");
     ds18b20_sensor_init(DS18B20_BUS_GPIO, DS18B20_MAX_COUNT);
-    ds18b20_sensor_start_reading(380);
+    ds18b20_sensor_start_continuous();
 
     //ESP_LOGI("MAIN", "Initializing Ventilation Control...");
     //ventilation_control_init(VENTILATION_CONTROL_PIN);

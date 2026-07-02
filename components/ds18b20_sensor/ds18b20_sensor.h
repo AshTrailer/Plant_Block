@@ -100,4 +100,14 @@ void ds18b20_sensor_start_reading(uint32_t interval_ms);
  */
 void ds18b20_sensor_stop_reading(void);
 
+/**
+ * @brief 启动最快连续温度采集（worker 自循环，约 380ms/次）
+ * 
+ * 与 start_reading 不同，此函数不使用定时器，worker task 在每次
+ * 读取完成后立即开始下一轮转换，达到硬件允许的最快采样率。
+ * 
+ * 调用 ds18b20_sensor_stop_reading() 停止。
+ */
+void ds18b20_sensor_start_continuous(void);
+
 #endif

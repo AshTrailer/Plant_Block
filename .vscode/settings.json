@@ -7,5 +7,6 @@
     "idf.toolsPath": "/home/ashtrailer/.espressif",
     "idf.pythonInstallPath": "/usr/bin/python",
     "idf.flashType": "UART",
-    "idf.monitorPort": "/dev/ttyACM0"
+    "idf.monitorPort": "/dev/ttyACM0",
+    "idf.currentSetup": "/home/ashtrailer/esp/v5.5.1/esp-idf"
 }

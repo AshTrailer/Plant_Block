@@ -14,17 +14,14 @@ static const char *TAG = "DS18B20_SENSOR";
 // ---------- 日志宏 ----------
 #define DS18B20_LOGI(fmt, ...) do { \
     ESP_LOGI(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[I] " fmt, ##__VA_ARGS__); \
 } while(0)
 
 #define DS18B20_LOGE(fmt, ...) do { \
     ESP_LOGE(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[E] " fmt, ##__VA_ARGS__); \
 } while(0)
 
 #define DS18B20_LOGW(fmt, ...) do { \
     ESP_LOGW(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[W] " fmt, ##__VA_ARGS__); \
 } while(0)
 
 // ---------- 配置 ----------
@@ -35,6 +32,7 @@ static const char *TAG = "DS18B20_SENSOR";
 static onewire_bus_handle_t      s_bus = NULL;
 static ds18b20_device_handle_t   s_devices[DS18B20_MAX_DEVICES];
 static int                       s_device_count = 0;
+static onewire_device_address_t s_device_addrs[DS18B20_MAX_DEVICES];
 
 // 工作线程
 static TaskHandle_t              s_worker_task = NULL;
@@ -51,19 +49,83 @@ static volatile bool             s_running = false;           // 采集是否运
 static ds18b20_temp_cb_t         s_once_callback = NULL;
 static void                     *s_once_user_ctx = NULL;
 
+// ---------- CRC8 校验（Maxim/Dallas 1-Wire CRC）----------
+static uint8_t crc8_ds18b20(const uint8_t *data, size_t len)
+{
+   uint8_t crc = 0;
+   for (size_t i = 0; i < len; i++) {
+      uint8_t byte = data[i];
+      for (int b = 0; b < 8; b++) {
+         uint8_t mix = (crc ^ byte) & 0x01;
+         crc >>= 1;
+         if (mix) crc ^= 0x8C;
+         byte >>= 1;
+      }
+   }
+   return crc;
+}
+
+// ---------- 手动读取单个设备的暂存器并解析温度 ----------
+// 前置条件：总线上所有设备已触发转换并等待完成（≥380ms for 11-bit）
+// 返回值：true = 读取成功且 CRC 校验通过
+static bool manual_read_one_device(int index, float *out_temp)
+{
+   // 1. 复位总线，检查设备是否存在
+   if (onewire_bus_reset(s_bus) != ESP_OK) {
+      DS18B20_LOGE("DS18B20[%d]: bus reset failed (no presence)", index);
+      return false;
+   }
+
+   // 2. Match ROM (0x55) + 8 字节地址（LSB first）
+   uint8_t match_cmd[9];
+   match_cmd[0] = 0x55;
+   memcpy(&match_cmd[1], &s_device_addrs[index], 8);
+   if (onewire_bus_write_bytes(s_bus, match_cmd, 9) != ESP_OK) {
+      DS18B20_LOGE("DS18B20[%d]: Match ROM failed", index);
+      return false;
+   }
+
+   // 3. Read Scratchpad (0xBE)
+   uint8_t read_cmd = 0xBE;
+   if (onewire_bus_write_bytes(s_bus, &read_cmd, 1) != ESP_OK) {
+      DS18B20_LOGE("DS18B20[%d]: Read Scratchpad cmd failed", index);
+      return false;
+   }
+
+   // 4. 读取 9 字节暂存器
+   uint8_t sp[9];
+   if (onewire_bus_read_bytes(s_bus, sp, 9) != ESP_OK) {
+      DS18B20_LOGE("DS18B20[%d]: read scratchpad failed", index);
+      return false;
+   }
+
+   // 5. CRC 校验（9 字节全部计算，结果应为 0）
+   uint8_t crc = crc8_ds18b20(sp, 9);
+   if (crc != 0) {
+      DS18B20_LOGE("DS18B20[%d]: CRC error (remainder=0x%02X)", index, crc);
+      return false;
+   }
+
+   // 6. 解析温度（16 位有符号，单位 1/16 °C）
+   int16_t raw = (int16_t)((sp[1] << 8) | sp[0]);
+   *out_temp = raw / 16.0f;
+
+   return true;
+}
+
 // ---------- 内部：读取所有设备并通知回调 ----------
 static void read_all_and_notify(ds18b20_temp_cb_t callback, void *user_ctx)
 {
    for (int i = 0; i < s_device_count; i++) {
       float temp = 0.0f;
-      esp_err_t err = ds18b20_get_temperature(s_devices[i], &temp);
-      if (err == ESP_OK) {
+      bool ok = manual_read_one_device(i, &temp);
+      if (ok) {
          DS18B20_LOGI("DS18B20[%d]: %.2f °C", i, temp);
          if (callback) {
             callback(i, temp, user_ctx);
          }
       } else {
-         DS18B20_LOGE("DS18B20[%d]: read failed (err=%d)", i, err);
+         DS18B20_LOGE("DS18B20[%d]: read failed", i);
          if (callback) {
             callback(i, -999.0f, user_ctx);
          }
@@ -74,16 +136,21 @@ static void read_all_and_notify(ds18b20_temp_cb_t callback, void *user_ctx)
 // ---------- 执行一次完整的"触发 → 等待 → 读取"循环 ----------
 static void do_one_cycle(void)
 {
-   esp_err_t err = ds18b20_trigger_temperature_conversion_for_all(s_bus);
-   if (err != ESP_OK) {
-      DS18B20_LOGE("Worker: trigger conversion failed (err=%d)", err);
+   // ===== 1. Skip ROM (0xCC) + Convert T (0x44) → 所有设备同时开始转换 =====
+   if (onewire_bus_reset(s_bus) != ESP_OK) {
+      DS18B20_LOGE("Worker: bus reset failed (no presence)");
+      return;
+   }
+   uint8_t conv_cmd[] = {0xCC, 0x44};
+   if (onewire_bus_write_bytes(s_bus, conv_cmd, sizeof(conv_cmd)) != ESP_OK) {
+      DS18B20_LOGE("Worker: Skip ROM + Convert T failed");
       return;
    }
 
-   // 等待转换完成（只阻塞本任务）
+   // ===== 2. 等待所有设备完成 11-bit 转换 =====
    vTaskDelay(pdMS_TO_TICKS(DS18B20_CONV_DELAY_MS));
 
-   // 消费一次性回调（如果有的话），否则用 NULL 只打日志
+   // ===== 3. 逐个 Match ROM + Read Scratchpad =====
    ds18b20_temp_cb_t cb = s_once_callback;
    void *ctx = s_once_user_ctx;
    s_once_callback = NULL;
@@ -175,7 +242,7 @@ void ds18b20_sensor_init(int gpio_num, int max_devices)
                onewire_device_address_t addr;
                ds18b20_get_device_address(handle, &addr);
                DS18B20_LOGI("  ROM: %016llX", addr);
-
+               s_device_addrs[s_device_count] = addr;
                s_device_count++;
             } else {
                ds18b20_del_device(handle);
@@ -226,8 +293,7 @@ bool ds18b20_sensor_get_temperature(int index, float *temperature)
    if (index < 0 || index >= s_device_count || temperature == NULL) {
       return false;
    }
-   esp_err_t err = ds18b20_get_temperature(s_devices[index], temperature);
-   return (err == ESP_OK);
+   return manual_read_one_device(index, temperature);
 }
 
 bool ds18b20_sensor_get_all_temperatures_blocking(float *temperatures)
@@ -237,17 +303,21 @@ bool ds18b20_sensor_get_all_temperatures_blocking(float *temperatures)
       return false;
    }
 
-   esp_err_t err = ds18b20_trigger_temperature_conversion_for_all(s_bus);
-   if (err != ESP_OK) {
-      DS18B20_LOGE("Trigger conversion failed: %d", err);
+   // Skip ROM + Convert T
+   if (onewire_bus_reset(s_bus) != ESP_OK) {
+      DS18B20_LOGE("Trigger: bus reset failed");
       return false;
    }
-
+   uint8_t conv_cmd[] = {0xCC, 0x44};
+   if (onewire_bus_write_bytes(s_bus, conv_cmd, sizeof(conv_cmd)) != ESP_OK) {
+      DS18B20_LOGE("Trigger: Skip ROM + Convert T failed");
+      return false;
+   }
    vTaskDelay(pdMS_TO_TICKS(DS18B20_CONV_DELAY_MS));
-
    bool all_ok = true;
    for (int i = 0; i < s_device_count; i++) {
-      if (!ds18b20_sensor_get_temperature(i, &temperatures[i])) {
+      if (!manual_read_one_device(i, &temperatures[i])) {
+         temperatures[i] = -999.0f;
          all_ok = false;
       }
    }
@@ -273,9 +343,13 @@ void ds18b20_sensor_read_once_async(ds18b20_temp_cb_t callback, void *user_ctx)
 void ds18b20_sensor_trigger_conversion(void)
 {
    if (s_device_count == 0) return;
-   esp_err_t err = ds18b20_trigger_temperature_conversion_for_all(s_bus);
-   if (err != ESP_OK) {
-      DS18B20_LOGE("trigger_conversion failed: %d", err);
+   if (onewire_bus_reset(s_bus) != ESP_OK) {
+      DS18B20_LOGE("trigger_conversion: bus reset failed");
+      return;
+   }
+   uint8_t conv_cmd[] = {0xCC, 0x44};
+   if (onewire_bus_write_bytes(s_bus, conv_cmd, sizeof(conv_cmd)) != ESP_OK) {
+      DS18B20_LOGE("trigger_conversion: Skip ROM + Convert T failed");
    }
 }
 

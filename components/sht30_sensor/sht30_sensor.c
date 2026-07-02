@@ -12,17 +12,14 @@ static const char *TAG = "SHT30_SENSOR";
 // ---------- 日志宏 ----------
 #define SHT30_LOGI(fmt, ...) do { \
     ESP_LOGI(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[I] " fmt, ##__VA_ARGS__); \
 } while(0)
 
 #define SHT30_LOGE(fmt, ...) do { \
     ESP_LOGE(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[E] " fmt, ##__VA_ARGS__); \
 } while(0)
 
 #define SHT30_LOGW(fmt, ...) do { \
     ESP_LOGW(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[W] " fmt, ##__VA_ARGS__); \
 } while(0)
 
 // ---------- 配置 ----------
@@ -43,7 +40,6 @@ static volatile float     s_last_temp = 0.0f;
 static volatile float     s_last_humidity = 0.0f;
 static volatile bool      s_data_valid = false;
 static volatile bool      s_running = false;
-static volatile bool      s_init_ok = false;     // 新增：传感器是否初始化成功
 
 // ---------- 工作线程 ----------
 static void sht30_worker_task(void *arg)
@@ -54,7 +50,7 @@ static void sht30_worker_task(void *arg)
       // 等待定时器通知
       ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-      if (!s_running || !s_init_ok) {
+      if (!s_running) {
          continue;
       }
 
@@ -81,7 +77,7 @@ static void sht30_worker_task(void *arg)
 // ---------- 定时器回调（极轻量）----------
 static void timer_cb(TimerHandle_t timer)
 {
-   if (s_worker_task != NULL && s_running && s_init_ok) {
+   if (s_worker_task != NULL && s_running) {
       xTaskNotifyGive(s_worker_task);
    }
 }
@@ -109,7 +105,22 @@ void sht30_sensor_init(int sda_pin, int scl_pin)
    }
    SHT30_LOGI("I2C bus created: SDA=GPIO%d, SCL=GPIO%d", sda_pin, scl_pin);
 
-   // --- 2. 创建工作线程（提前，防止后续失败导致 start 崩溃）---
+   // --- 2. 创建 SHT3x 传感器实例 ---
+   s_sht3x = sht3x_create(s_i2c_bus, SHT3x_ADDR_PIN_SELECT_VSS);
+   if (s_sht3x == NULL) {
+      SHT30_LOGE("Failed to create SHT3x sensor! Check wiring.");
+      return;
+   }
+
+   // --- 3. 设为周期测量模式：1 次/秒，中等重复性 ---
+   esp_err_t err = sht3x_set_measure_mode(s_sht3x, SHT3x_PER_1_MEDIUM);
+   if (err != ESP_OK) {
+      SHT30_LOGE("Failed to set periodic mode (err=%d)", err);
+      return;
+   }
+   SHT30_LOGI("Sensor initialized, periodic mode: 1 measurement/sec, medium repeatability");
+
+   // --- 4. 创建工作线程 ---
    xTaskCreate(
       sht30_worker_task,
       "sht30_worker",
@@ -119,7 +130,7 @@ void sht30_sensor_init(int sda_pin, int scl_pin)
       &s_worker_task
    );
 
-   // --- 3. 创建 1Hz 定时器（提前，防止后续失败导致 start 崩溃）---
+   // --- 5. 创建 1Hz 定时器（不启动）---
    s_timer = xTimerCreate(
       "sht30_timer",
       pdMS_TO_TICKS(SHT30_READ_INTERVAL_MS),
@@ -133,36 +144,13 @@ void sht30_sensor_init(int sda_pin, int scl_pin)
       return;
    }
 
-   // --- 4. 创建 SHT3x 传感器实例 ---
-   s_sht3x = sht3x_create(s_i2c_bus, SHT3x_ADDR_PIN_SELECT_VSS);
-   if (s_sht3x == NULL) {
-      SHT30_LOGE("Failed to create SHT3x sensor! Check wiring / pull-up resistors.");
-      SHT30_LOGE("ADDR pin should be connected to GND (address 0x44).");
-      return;  // s_init_ok 保持 false，start 不会崩溃
-   }
-
-   // --- 5. 设为周期测量模式：1 次/秒，中等重复性 ---
-   esp_err_t err = sht3x_set_measure_mode(s_sht3x, SHT3x_PER_1_MEDIUM);
-   if (err != ESP_OK) {
-      SHT30_LOGE("Failed to set periodic mode (err=%d). Sensor may not be present.", err);
-      SHT30_LOGE("Check: wiring, pull-up resistors (4.7kΩ on SDA/SCL), ADDR → GND.");
-      return;  // s_init_ok 保持 false，start 不会崩溃
-   }
-
-   // --- 全部成功 ---
-   s_init_ok = true;
-   SHT30_LOGI("Sensor initialized, periodic mode: 1 measurement/sec, medium repeatability");
+   SHT30_LOGI("SHT30 sensor module initialized");
 }
 
 void sht30_sensor_start(void)
 {
-   if (!s_init_ok) {
-      SHT30_LOGW("Cannot start: sensor not initialized or initialization failed");
-      return;
-   }
-
-   if (s_timer == NULL) {
-      SHT30_LOGE("Cannot start: timer not created");
+   if (s_sht3x == NULL) {
+      SHT30_LOGE("Cannot start: sensor not initialized");
       return;
    }
 

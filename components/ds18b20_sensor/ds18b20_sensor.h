@@ -44,7 +44,7 @@ bool ds18b20_sensor_get_temperature(int index, float *temperature);
 /**
  * @brief 获取所有设备的温度（一次触发，等待转换完成后逐个读取）
  * 
- * ⚠️ 阻塞版本：内部使用 vTaskDelay 等待转换完成。
+ * 阻塞版本：内部使用 vTaskDelay 等待转换完成。
  * 仅在可接受阻塞的任务中调用（如初始化阶段测试），
  * 正常运行中请使用 ds18b20_sensor_start_reading 或异步版本。
  * 

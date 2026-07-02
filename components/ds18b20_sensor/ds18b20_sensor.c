@@ -145,7 +145,7 @@ void ds18b20_sensor_init(int gpio_num, int max_devices)
             if (s_device_count < max_devices) {
                s_devices[s_device_count] = handle;
 
-               esp_err_t res_err = ds18b20_set_resolution(handle, DS18B20_RESOLUTION_11_BIT);
+               esp_err_t res_err = ds18b20_set_resolution(handle, DS18B20_RESOLUTION_11B);
                if (res_err == ESP_OK) {
                   DS18B20_LOGI("Found DS18B20[%d], resolution set to 11-bit", s_device_count);
                } else {

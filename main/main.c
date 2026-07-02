@@ -28,7 +28,7 @@
 #define LIGHT_PWM_PIN4 17
 #define LIGHT_FAN_PIN 15
 #define DS18B20_BUS_GPIO 27
-#define DS18B20_MAX_COUNT  2
+#define DS18B20_MAX_COUNT  3
 
 void app_main(void) {
     ESP_LOGI("MAIN", "System starting, initializing components...");
@@ -57,7 +57,7 @@ void app_main(void) {
     
     ESP_LOGI("MAIN", "Initializing DS18B20 Sensor...");
     ds18b20_sensor_init(DS18B20_BUS_GPIO, DS18B20_MAX_COUNT);
-    ds18b20_sensor_start_reading(5000);
+    ds18b20_sensor_start_reading(380);
 
     //ESP_LOGI("MAIN", "Initializing Ventilation Control...");
     //ventilation_control_init(VENTILATION_CONTROL_PIN);

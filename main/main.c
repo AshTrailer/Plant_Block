@@ -14,7 +14,7 @@
 #include "cloud_comm.h"
 #include "hmi_uart.h"
 #include "ds18b20_sensor.h"
-
+#include "sht30_sensor.h"
 
 #define HMI_UART_TX_PIN 16
 #define HMI_UART_RX_PIN 17
@@ -29,6 +29,8 @@
 #define LIGHT_FAN_PIN 15
 #define DS18B20_BUS_GPIO 27
 #define DS18B20_MAX_COUNT  3
+#define SHT30_SDA_PIN 25
+#define SHT30_SCL_PIN 26
 
 void app_main(void) {
     ESP_LOGI("MAIN", "System starting, initializing components...");
@@ -58,6 +60,10 @@ void app_main(void) {
     ESP_LOGI("MAIN", "Initializing DS18B20 Sensor...");
     ds18b20_sensor_init(DS18B20_BUS_GPIO, DS18B20_MAX_COUNT);
     ds18b20_sensor_start_continuous();
+
+    ESP_LOGI("MAIN", "Initializing SHT30 Sensor...");
+    sht30_sensor_init(SHT30_SDA_PIN, SHT30_SCL_PIN);
+    sht30_sensor_start();
 
     //ESP_LOGI("MAIN", "Initializing Ventilation Control...");
     //ventilation_control_init(VENTILATION_CONTROL_PIN);

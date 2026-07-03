@@ -24,8 +24,17 @@ static const char *TAG = "GPIO_CONTROL";
 
 // 初始化时配置的GPIO引脚列表
 //static const int s_managed_pins[] = {1, 3, 4, 5, 6, 7, 8, 9, 14, 15, 18};
-static const int s_managed_pins[] = {2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23,
-                                            25, 26, 27, 32, 33};
+static const int s_managed_pins[] = {
+    2,   // COB 风扇
+    4,   // TEC 热端风扇
+    5,   // TEC 冷端风扇
+    12,  // 蠕动泵
+    13,  // 通风风扇
+    14,  // 光照 PWM
+    15,  // 土壤湿度传感器 VCC
+    18,  // TEC PWM_H
+    19   // TEC PWM_L
+};
 static const int s_managed_pin_count = sizeof(s_managed_pins) / sizeof(s_managed_pins[0]);
 
 // 检查引脚号是否在受管理的列表中

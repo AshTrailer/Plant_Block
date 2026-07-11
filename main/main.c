@@ -17,18 +17,6 @@
 #include "sht30_sensor.h"
 #include "float_switch.h"
 
-
-
-#define MOISTURE_SENSOR_POWER_PIN   15   // GPIO15 → 土壤湿度传感器 VCC 控制
-#define MOISTURE_SENSOR_ADC_PIN     35   // GPIO35 → 土壤湿度模拟输入 (ADC)
-#define VENTILATION_CONTROL_PIN     13   // GPIO13 → 通风风扇 (NMOS)
-#define IRRIGATION_CONTROL_PIN      12   // GPIO12 → 蠕动泵 (NMOS)
-#define LIGHT_PWM_PIN               14   // GPIO14 → 升压恒流光照 PWM
-#define DS18B20_BUS_GPIO            16   // GPIO16 → DS18B20 #1/#2
-#define DS18B20_MAX_COUNT           2    // 挂 2 个传感器
-#define SHT30_SDA_PIN               21   // GPIO21 → SHT30 SDA
-#define SHT30_SCL_PIN               22   // GPIO22 → SHT30 SCL
-
 // ==================== 系统固定引脚 ====================
 // GPIO0  → 自动下载电路 + 按键 (strapping, 不可更改)
 // GPIO1  → UART TXD0 → CH340 RX (固定)

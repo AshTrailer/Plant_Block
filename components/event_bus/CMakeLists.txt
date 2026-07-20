@@ -1,7 +1,6 @@
 idf_component_register(
-    SRCS "float_switch.c"
+    SRCS "event_bus.c"
     INCLUDE_DIRS "."
     REQUIRES 
         cloud_comm
-        event_bus
 )

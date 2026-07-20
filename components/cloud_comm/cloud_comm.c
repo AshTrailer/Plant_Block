@@ -12,6 +12,7 @@
 #include "time.h"
 #include "time_manager.h"
 #include "command_processor.h"
+#include "event_bus.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -40,6 +41,18 @@ static cloud_comm_msg_cb_t s_msg_cb = NULL;
 
 // 证书（来自 example.c）
 extern const char *server_cert;  // 定义在文件末尾
+
+// ------------------ 事件总线回调（放在 mqtt_event_handler 之前）------------------
+static void cloud_on_alarm_event(event_type_t type, const void *data, size_t len, void *ctx)
+{
+   (void)type;
+   (void)len;
+   (void)ctx;
+   const char *msg = (const char *)data;
+   if (msg) {
+      cloud_comm_publish("alarm", msg);
+   }
+}
 
 // ------------------ WiFi 事件处理 ------------------
 static void wifi_event_handler(void *arg, esp_event_base_t event_base,
@@ -125,6 +138,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             ESP_LOGI(TAG, "Published online status");
 
             xEventGroupSetBits(s_event_group, MQTT_CONNECTED_BIT);
+            event_bus_subscribe(EVENT_ALARM, cloud_on_alarm_event, NULL);
             break;
 
         case MQTT_EVENT_DISCONNECTED:

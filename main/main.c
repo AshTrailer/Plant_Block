@@ -1,8 +1,10 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-//#include "esp_system.h" 
+#include "driver/gpio.h"
+#include "driver/uart.h"
 
+#include "pin_definitions.h"
 #include "time_manager.h"
 #include "input_parser.h"
 #include "command_processor.h"
@@ -12,100 +14,139 @@
 #include "irrigation_controller.h"
 #include "moisture_sensor.h"
 #include "cloud_comm.h"
-#include "hmi_uart.h"
 #include "ds18b20_sensor.h"
 #include "sht30_sensor.h"
 #include "float_switch.h"
+#include "fan_control.h"
+#include "vofa_output.h"
+#include "event_bus.h"
+#include "system_monitor.h"
 
-// ==================== 系统固定引脚 ====================
-// GPIO0  → 自动下载电路 + 按键 (strapping, 不可更改)
-// GPIO1  → UART TXD0 → CH340 RX (固定)
-// GPIO3  → UART RXD0 → CH340 TX (固定)
-// ==================== 传感器 ====================
-#define MOISTURE_SENSOR_POWER_PIN   25   // GPIO25 → 土壤湿度传感器 VCC 控制
-#define MOISTURE_SENSOR_ADC_PIN     35   // GPIO35 → 土壤湿度模拟输入 (ADC1_CH7)
-#define FLOAT_SWITCH_PIN            34   // GPIO34 → 浮球开关 (仅输入, 需外部上拉)
-#define SHT30_SDA_PIN               21   // GPIO21 → SHT30 SDA
-#define SHT30_SCL_PIN               22   // GPIO22 → SHT30 SCL
-#define DS18B20_BUS_PIN             16   // GPIO16 → DS18B20 单总线 (两个传感器)
-#define DS18B20_MAX_COUNT           2
-// ==================== 温度保护 ====================
-#define OVERTEMP_DETECT_PIN         36   // GPIO36 → 过温检测信号 (仅输入, ADC1_CH0)
-// ==================== 执行器 - NMOS 控制 ====================
-#define IRRIGATION_CONTROL_PIN      12   // GPIO12 → 蠕动泵 (strapping, 上电天然低→泵不转)
-#define VENTILATION_CONTROL_PIN     13   // GPIO13 → 通风风扇
-#define COB_FAN_CONTROL_PIN         4    // GPIO4  → COB 散热风扇
-#define TEC_HOT_FAN_CONTROL_PIN     17   // GPIO17 → TEC 热端散热风扇
-#define TEC_COLD_FAN_CONTROL_PIN    23   // GPIO23 → TEC 冷端散热风扇
-// ==================== 执行器 - PWM ====================
-#define LIGHT_PWM_PIN               14   // GPIO14 → 升压恒流光照 PWM (LEDC)
-// ==================== TEC H 桥 ====================
-#define TEC_PWM_H_PIN               18   // GPIO18 → IR2104 半桥 H (MCPWM)
-#define TEC_PWM_L_PIN               19   // GPIO19 → IR2104 半桥 L (MCPWM)
+static const char *TAG = "MAIN";
 
-void app_main(void) {
-    ESP_LOGI("MAIN", "System starting, initializing components...");
-    esp_log_level_set("*", ESP_LOG_INFO);
+// ==================== Vofa+ 传感器数据发布任务 ====================
+static TaskHandle_t s_vofa_task_handle = NULL;
 
-    ESP_LOGI("MAIN", "Initializing GPIO Control..."); // If reported error here, check gpio_control.c for pin configuration
-    gpio_control_init();
+static void vofa_sensor_task(void *arg)
+{
+   (void)arg;
+   vTaskDelay(pdMS_TO_TICKS(3000));
+   ESP_LOGI(TAG, "Vofa sensor task started");
 
-    ESP_LOGI("MAIN", "Initializing Time Manager...");
-    time_manager_init();    
+   while (1) {
+      float sht30_t = 0, sht30_h = 0;
+      sht30_sensor_get_data(&sht30_t, &sht30_h);
 
-    // 在 time_manager_init() 之后记录启动时间
-    //start_time = time_manager_get_unix_time();
+      float ds18_cold = -999, ds18_hot = -999;
+      ds18b20_sensor_get_temperature(0, &ds18_cold);
+      ds18b20_sensor_get_temperature(1, &ds18_hot);
 
-    ESP_LOGI("MAIN", "Initializing Input Parser...");
-    input_parser_init(false, INPUT_MODE_NON_BLOCKING);
+      float moist_pct = moisture_sensor_get_humidity_percent();
+      uint32_t moist_mv = moisture_sensor_get_calibrated_voltage();
 
-    ESP_LOGI("MAIN", "Initializing Command Processor...");
-    command_processor_init();
+      bool has_water = float_switch_get_state();
+      bool ntc_overtemp = (gpio_get_level(PIN_NTC_OVERTEMP) == 1);
 
-    ESP_LOGI("MAIN", "Initializing Moisture Sensor...");
-    moisture_sensor_init(MOISTURE_SENSOR_POWER_PIN, MOISTURE_SENSOR_ADC_PIN); 
-    
-    ESP_LOGI("MAIN", "Initializing DS18B20 Sensor...");
-    ds18b20_sensor_init(DS18B20_BUS_PIN, DS18B20_MAX_COUNT);
-    ds18b20_sensor_start_continuous();
+      bool light_on = light_control_is_on();
+      uint8_t light_duty = light_control_get_pwm_duty();
 
-    ESP_LOGI("MAIN", "Initializing SHT30 Sensor...");
-    sht30_sensor_init(SHT30_SDA_PIN, SHT30_SCL_PIN);
-    sht30_sensor_start();
+      // 蠕动泵简单开关状态（irrigation_controller 内部管理，暂无查询接口）
+      bool pump_on = false;
+      uint8_t pump_speed = 0;
 
-    ESP_LOGI("MAIN", "Initializing Float Switch...");
-    float_switch_init(FLOAT_SWITCH_PIN);
-    float_switch_start_monitor(500);
+      vofa_output_send_sensor_frame(sht30_t, sht30_h,
+                                    ds18_cold, ds18_hot,
+                                    moist_pct, moist_mv,
+                                    has_water, ntc_overtemp,
+                                    light_duty, light_on,
+                                    pump_speed, pump_on);
 
-    ESP_LOGI("MAIN", "Initializing Ventilation Control...");
-    ventilation_control_init(VENTILATION_CONTROL_PIN);
-    ventilation_control_start();
+      vTaskDelay(pdMS_TO_TICKS(1000));
+   }
+}
 
-    ESP_LOGI("MAIN", "Initializing Light Control...");
-    light_control_init((const int[]){LIGHT_PWM_PIN1, LIGHT_PWM_PIN2, LIGHT_PWM_PIN3, LIGHT_PWM_PIN4}, LIGHT_FAN_PIN);
+void app_main(void)
+{
+   ESP_LOGI(TAG, "========================================");
+   ESP_LOGI(TAG, "  Plant Grow Controller V2.0 Boot");
+   ESP_LOGI(TAG, "========================================");
+   esp_log_level_set("*", ESP_LOG_INFO);
 
-    ESP_LOGI("MAIN", "Initializing Irrigation Controller...");
-    irrigation_controller_init(IRRIGATION_CONTROL_PIN);
+   // ---- 基础设施 ----
+   ESP_LOGI(TAG, "[0/9] Initializing Event Bus...");
+   event_bus_init();
 
-    ESP_LOGI("MAIN", "Initializing Cloud Communication...");
-    cloud_comm_init();
-    cloud_comm_start();
+   ESP_LOGI(TAG, "[1/9] Initializing GPIO Control...");
+   gpio_control_init();
 
-    ESP_LOGI("MAIN", "All components initialized.");
+   ESP_LOGI(TAG, "[2/9] Initializing Vofa+ Output (UART0, 115200bps)...");
+   vofa_output_init(UART_NUM_0, 115200);
+   vofa_output_subscribe_all();
 
-    while (1) {
-        // 轮询输入
-        input_parser_poll();
-        light_control_poll();
-        irrigation_controller_poll();
+   ESP_LOGI(TAG, "[3/9] Initializing Time Manager...");
+   time_manager_init();
 
-        if (input_parser_frame_ready()) {
-            const char* frame = input_parser_get_frame();
-            if (frame != NULL) {
-                command_processor_process_frame(frame);
-            }
-        }
-        // 主循环延时
-        vTaskDelay(50 / portTICK_PERIOD_MS);
-    }
+   ESP_LOGI(TAG, "[4/9] Initializing Input Parser (non-blocking)...");
+   input_parser_init(false, INPUT_MODE_NON_BLOCKING);
+
+   ESP_LOGI(TAG, "[5/9] Initializing Command Processor...");
+   command_processor_init();
+
+   // ---- 传感器 ----
+   ESP_LOGI(TAG, "[6/9] Initializing Sensors...");
+   moisture_sensor_init(PIN_MOISTURE_POWER, PIN_MOISTURE_ADC);
+   ds18b20_sensor_init(PIN_DS18B20_BUS, PIN_DS18B20_MAX_COUNT);
+   ds18b20_sensor_start_continuous();
+   sht30_sensor_init(PIN_SHT30_SDA, PIN_SHT30_SCL);
+   sht30_sensor_start();
+   float_switch_init(PIN_FLOAT_SWITCH);
+   float_switch_start_monitor(500);
+
+   // ---- 执行器 ----
+   ESP_LOGI(TAG, "[7/9] Initializing Actuators...");
+   fan_control_init();
+   ventilation_control_init(PIN_VENTILATION_FAN);
+   ventilation_control_start();
+
+   const int light_pins[LIGHT_CHANNEL_COUNT] = { PIN_COB_LED_PWM };
+   light_control_init(light_pins, -1);  // COB 散热由 fan_control 管理
+
+   irrigation_controller_init(PIN_IRRIGATION_PUMP);
+
+   // ---- 云端通信 ----
+   ESP_LOGI(TAG, "[8/9] Initializing Cloud Communication...");
+   cloud_comm_init();
+   cloud_comm_start();
+
+   // ---- 系统监控 ----
+   ESP_LOGI(TAG, "[9/9] Initializing System Monitor...");
+   system_monitor_init(10000, 256);
+
+   // ---- Vofa+ 数据任务 ----
+   xTaskCreate(vofa_sensor_task, "vofa_sensor", 4096, NULL,
+               tskIDLE_PRIORITY + 3, &s_vofa_task_handle);
+   if (s_vofa_task_handle) {
+      system_monitor_register_task("vofa_sensor", s_vofa_task_handle);
+   }
+
+   ESP_LOGI(TAG, "========================================");
+   ESP_LOGI(TAG, "  All components initialized.");
+   ESP_LOGI(TAG, "  Ready. Type 'help' for commands.");
+   ESP_LOGI(TAG, "========================================");
+
+   while (1) {
+      input_parser_poll();
+      light_control_poll();
+      irrigation_controller_poll();
+
+      if (input_parser_frame_ready()) {
+         const char *frame = input_parser_get_frame();
+         if (frame != NULL) {
+            command_processor_process_frame(frame);
+         }
+      }
+
+      system_monitor_feed_watchdog();
+      vTaskDelay(50 / portTICK_PERIOD_MS);
+   }
 }

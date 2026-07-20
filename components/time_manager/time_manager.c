@@ -10,20 +10,10 @@
 
 static const char *TAG = "TIME_MGR";
 
-#define TIME_LOGI(fmt, ...) do { \
-    ESP_LOGI(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[I] " fmt, ##__VA_ARGS__); \
-} while(0)
+#define TIME_LOGI(fmt, ...) ESP_LOGI(TAG, fmt, ##__VA_ARGS__)
+#define TIME_LOGW(fmt, ...) ESP_LOGW(TAG, fmt, ##__VA_ARGS__)
+#define TIME_LOGE(fmt, ...) ESP_LOGE(TAG, fmt, ##__VA_ARGS__)
 
-#define TIME_LOGE(fmt, ...) do { \
-    ESP_LOGE(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[E] " fmt, ##__VA_ARGS__); \
-} while(0)
-
-#define TIME_LOGW(fmt, ...) do { \
-    ESP_LOGW(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[W] " fmt, ##__VA_ARGS__); \
-} while(0)
 
 // 内部时间变量
 static system_time_t s_current_time = {

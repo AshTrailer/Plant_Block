@@ -8,26 +8,15 @@
 #include "esp_adc/adc_cali_scheme.h"
 #include "gpio_control.h"
 #include "data_processor.h"
-#include "cloud_comm.h"
 #include <string.h>
 #include <math.h>
 
 static const char *TAG = "MOISTURE_SENSOR";
 
-#define MOISTURE_LOGI(fmt, ...) do { \
-    ESP_LOGI(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[I] " fmt, ##__VA_ARGS__); \
-} while(0)
+#define MOISTURE_LOGI(fmt, ...) ESP_LOGI(TAG, fmt, ##__VA_ARGS__)
+#define MOISTURE_LOGW(fmt, ...) ESP_LOGW(TAG, fmt, ##__VA_ARGS__)
+#define MOISTURE_LOGE(fmt, ...) ESP_LOGE(TAG, fmt, ##__VA_ARGS__)
 
-#define MOISTURE_LOGE(fmt, ...) do { \
-    ESP_LOGE(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[E] " fmt, ##__VA_ARGS__); \
-} while(0)
-
-#define MOISTURE_LOGW(fmt, ...) do { \
-    ESP_LOGW(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[W] " fmt, ##__VA_ARGS__); \
-} while(0)
 
 // 硬件配置
 static int s_power_pin = 15;
@@ -93,35 +82,50 @@ static bool adc_calibration_init(void) {
     return calibrated;
 }
 
+// 修改 adc_init() 中的通道参数，使之与传入参数一致：
+// 修改前（hardcoded）:
+//   ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, ADC_CHANNEL_4, &chan_cfg));
+//   int raw = 0;
+//   ESP_ERROR_CHECK(adc_oneshot_read(s_adc_handle, ADC_CHANNEL_4, &raw));
+// 修改后（根据 s_adc_pin 动态映射）:
+static adc_channel_t get_adc_channel(int gpio) {
+   // ADC1 通道映射（仅列出使用的）
+   switch (gpio) {
+      case 35: return ADC_CHANNEL_7;  // GPIO35 = ADC1_CH7
+      default: return ADC_CHANNEL_7;
+   }
+}
+
 // ADC 硬件初始化
 static void adc_init(void) {
     adc_oneshot_unit_init_cfg_t init_cfg = {
-        .unit_id = ADC_UNIT_1,//ADC_UNIT_1
+        .unit_id = ADC_UNIT_1,
         .ulp_mode = ADC_ULP_MODE_DISABLE,
     };
     ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_cfg, &s_adc_handle));
-
+    adc_channel_t channel = get_adc_channel(s_adc_pin);
     adc_oneshot_chan_cfg_t chan_cfg = {
         .atten = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_12,
     };
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, ADC_CHANNEL_4, &chan_cfg));//ADC_CHANNEL_2
-    MOISTURE_LOGI("ADC configured: GPIO%d (ADC1_CH2), 12-bit, 0-3.3V", s_adc_pin);
-
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(s_adc_handle, channel, &chan_cfg));
+    MOISTURE_LOGI("ADC configured: GPIO%d, 12-bit", s_adc_pin);
     adc_calibration_init();
 }
 
 // 读取原始ADC值
 static uint32_t adc_read_raw(void) {
     int raw = 0;
-    ESP_ERROR_CHECK(adc_oneshot_read(s_adc_handle, ADC_CHANNEL_4, &raw));//ADC_CHANNEL_2
+    adc_channel_t channel = get_adc_channel(s_adc_pin);
+    ESP_ERROR_CHECK(adc_oneshot_read(s_adc_handle, channel, &raw));
     return (uint32_t)raw;
 }
 
 // 读取eFuse校准后的电压（mV）
 static uint32_t adc_read_voltage_efuse(void) {
     int raw = 0;
-    ESP_ERROR_CHECK(adc_oneshot_read(s_adc_handle, ADC_CHANNEL_4, &raw));//ADC_CHANNEL_2
+    adc_channel_t channel = get_adc_channel(s_adc_pin);
+    ESP_ERROR_CHECK(adc_oneshot_read(s_adc_handle, channel, &raw));
     int voltage_mv = 0;
     if (s_adc_cali_handle != NULL) {
         esp_err_t ret = adc_cali_raw_to_voltage(s_adc_cali_handle, raw, &voltage_mv);

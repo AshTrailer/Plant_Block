@@ -1,8 +1,7 @@
 idf_component_register(
-    SRCS "gpio_control.c"
+    SRCS "fan_control.c"
     INCLUDE_DIRS "."
     REQUIRES 
         driver
-        ventilation_control
         pin_definitions
 )

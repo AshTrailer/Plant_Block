@@ -5,7 +5,6 @@
 #include "freertos/timers.h"
 #include "onewire_bus.h"
 #include "ds18b20.h"
-#include "cloud_comm.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -27,6 +26,12 @@ static const char *TAG = "DS18B20_SENSOR";
 // ---------- 配置 ----------
 #define DS18B20_MAX_DEVICES      4
 #define DS18B20_CONV_DELAY_MS    380   // 11-bit: 375ms + 5ms 余量
+
+// ========== 新增静态数据 ==========
+static char s_device_roles[DS18B20_MAX_DEVICES][8] = {
+   "cold", "hot", "", ""
+};
+
 
 // ---------- 静态状态 ----------
 static onewire_bus_handle_t      s_bus = NULL;
@@ -234,7 +239,8 @@ void ds18b20_sensor_init(int gpio_num, int max_devices)
 
                esp_err_t res_err = ds18b20_set_resolution(handle, DS18B20_RESOLUTION_11B);
                if (res_err == ESP_OK) {
-                  DS18B20_LOGI("Found DS18B20[%d], resolution set to 11-bit", s_device_count);
+                  DS18B20_LOGI("Found DS18B20[%d], role: %s, resolution set to 11-bit",
+             s_device_count, s_device_roles[s_device_count]);
                } else {
                   DS18B20_LOGW("DS18B20[%d]: set 11-bit failed (err=%d)", s_device_count, res_err);
                }
@@ -419,4 +425,16 @@ void ds18b20_sensor_stop_reading(void)
    s_running = false;
    xTimerStop(s_periodic_timer, 0);
    DS18B20_LOGI("Reading stopped");
+}
+
+void ds18b20_set_role(int index, const char *role) {
+   if (index >= 0 && index < DS18B20_MAX_DEVICES) {
+      strncpy(s_device_roles[index], role, sizeof(s_device_roles[index]) - 1);
+   }
+}
+const char *ds18b20_get_role(int index) {
+   if (index >= 0 && index < DS18B20_MAX_DEVICES) {
+      return s_device_roles[index];
+   }
+   return "unknown";
 }

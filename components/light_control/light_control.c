@@ -12,20 +12,9 @@ static const char *TAG = "LIGHT_CONTROL";
 // 散热风扇状态变量
 static bool s_fan_enabled = false;
 
-#define LIGHT_LOGI(fmt, ...) do { \
-   ESP_LOGI(TAG, fmt, ##__VA_ARGS__); \
-   cloud_comm_publish_log("[I] " fmt, ##__VA_ARGS__); \
-} while(0)
-
-#define LIGHT_LOGE(fmt, ...) do { \
-   ESP_LOGE(TAG, fmt, ##__VA_ARGS__); \
-   cloud_comm_publish_log("[E] " fmt, ##__VA_ARGS__); \
-} while(0)
-
-#define LIGHT_LOGW(fmt, ...) do { \
-   ESP_LOGW(TAG, fmt, ##__VA_ARGS__); \
-   cloud_comm_publish_log("[W] " fmt, ##__VA_ARGS__); \
-} while(0)
+#define LIGHT_LOGI(fmt, ...) ESP_LOGI(TAG, fmt, ##__VA_ARGS__)
+#define LIGHT_LOGE(fmt, ...) ESP_LOGE(TAG, fmt, ##__VA_ARGS__)
+#define LIGHT_LOGW(fmt, ...) ESP_LOGW(TAG, fmt, ##__VA_ARGS__)
 
 // PWM配置
 #define PWM_TIMER          LEDC_TIMER_0
@@ -60,7 +49,7 @@ static light_schedule_t s_schedule = {
    .end_hour = 18,      // 默认晚上6点关闭
    .end_minute = 0,
    .duration_hours = 10.0, // 默认10小时
-   .pwm_pins = {4, 16 ,18, 17}, // 默认四个PWM引脚
+   .pwm_pins = {14}, // 默认四个PWM引脚
    .fan_pin = 15, // 默认散热风扇引脚
    .is_manual_mode = false,
    .manual_state = false
@@ -148,45 +137,17 @@ static float get_elapsed_minutes_today(void) {
    return (float)(current_minutes - start_minutes);
 }
 
-// 设置所有通道的PWM占空比（0-100%）
-static bool set_all_channels_pwm_duty(uint8_t duty_percent) {
-   if (!s_pwm_initialized) {
-      LIGHT_LOGE("PWM未初始化");
-      return false;
-   }
-   
-   if (duty_percent > PWM_MAX_DUTY_PERCENT) {
-      LIGHT_LOGE("占空比超出范围: %d (0-100)", duty_percent);
-      return false;
-   }
-   
-   // 计算实际占空比值
+// ========== 设置占空比（单通道）==========
+static bool set_pwm_duty(uint8_t duty_percent) {
+   if (!s_pwm_initialized) return false;
+   if (duty_percent > PWM_MAX_DUTY_PERCENT) duty_percent = PWM_MAX_DUTY_PERCENT;
    uint32_t duty_value = 0;
    if (duty_percent > 0) {
       duty_value = (uint32_t)((float)duty_percent / 100.0f * (float)PWM_MAX_DUTY);
    }
-   
-   // 更新所有通道的占空比
-   for (int i = 0; i < LIGHT_CHANNEL_COUNT; i++) {
-      ledc_channel_t channel = (ledc_channel_t)i; // LEDC_CHANNEL_0 到 LEDC_CHANNEL_3
-      
-      esp_err_t ret = ledc_set_duty(PWM_MODE, channel, duty_value);
-      if (ret != ESP_OK) {
-         LIGHT_LOGE("设置通道%d PWM占空比失败: %s", i, esp_err_to_name(ret));
-         return false;
-      }
-      
-      // 更新输出
-      ret = ledc_update_duty(PWM_MODE, channel);
-      if (ret != ESP_OK) {
-         LIGHT_LOGE("更新通道%d PWM输出失败: %s", i, esp_err_to_name(ret));
-         return false;
-      }
-   }
-   
+   ledc_set_duty(PWM_MODE, LEDC_CHANNEL_0, duty_value);
+   ledc_update_duty(PWM_MODE, LEDC_CHANNEL_0);
    s_current_pwm_duty = duty_percent;
-   
-   // LIGHT_LOGI("所有通道PWM占空比设置为: %d%% (值: %d)", duty_percent, duty_value);
    return true;
 }
 
@@ -227,58 +188,48 @@ static uint8_t calculate_auto_pwm_duty(void) {
    return (uint8_t)duty_percent;
 }
 
-// 初始化PWM（四通道）
+// ========== PWM 初始化（单通道）==========
 static bool pwm_init(void) {
    if (s_pwm_initialized) {
       LIGHT_LOGW("PWM已经初始化");
       return true;
    }
-   
-   // 配置定时器（所有通道共享同一个定时器）
+
+   // 1. 配置定时器
    ledc_timer_config_t timer_config = {
-      .speed_mode       = PWM_MODE,
-      .timer_num        = PWM_TIMER,
-      .duty_resolution  = PWM_RESOLUTION,
-      .freq_hz          = PWM_FREQUENCY_HZ,
-      .clk_cfg          = LEDC_AUTO_CLK
+      .speed_mode      = PWM_MODE,
+      .timer_num       = PWM_TIMER,
+      .duty_resolution = PWM_RESOLUTION,
+      .freq_hz         = PWM_FREQUENCY_HZ,
+      .clk_cfg         = LEDC_AUTO_CLK
    };
-   
    esp_err_t ret = ledc_timer_config(&timer_config);
    if (ret != ESP_OK) {
       LIGHT_LOGE("PWM定时器配置失败: %s", esp_err_to_name(ret));
       return false;
    }
-   
-   // 配置四个通道
-   for (int i = 0; i < LIGHT_CHANNEL_COUNT; i++) {
-      ledc_channel_config_t channel_config = {
-         .gpio_num       = s_schedule.pwm_pins[i],
-         .speed_mode     = PWM_MODE,
-         .channel        = (ledc_channel_t)i, // LEDC_CHANNEL_0 到 LEDC_CHANNEL_3
-         .intr_type      = LEDC_INTR_DISABLE,
-         .timer_sel      = PWM_TIMER,
-         .duty           = 0,  // 初始占空比为0
-         .hpoint         = 0
-      };
-      
-      ret = ledc_channel_config(&channel_config);
-      if (ret != ESP_OK) {
-         LIGHT_LOGE("通道%d PWM配置失败: %s", i, esp_err_to_name(ret));
-         return false;
-      }
+
+   // 2. 配置单通道
+   ledc_channel_config_t channel_config = {
+      .gpio_num   = s_schedule.pwm_pins[0],
+      .speed_mode = PWM_MODE,
+      .channel    = LEDC_CHANNEL_0,
+      .intr_type  = LEDC_INTR_DISABLE,
+      .timer_sel  = PWM_TIMER,
+      .duty       = 0,
+      .hpoint     = 0
+   };
+   ret = ledc_channel_config(&channel_config);
+   if (ret != ESP_OK) {
+      LIGHT_LOGE("PWM通道配置失败: %s", esp_err_to_name(ret));
+      return false;
    }
-   
+
    s_pwm_initialized = true;
    s_current_pwm_duty = 0;
-   
-   LIGHT_LOGI("四通道PWM初始化完成");
-   for (int i = 0; i < LIGHT_CHANNEL_COUNT; i++) {
-      LIGHT_LOGI("通道%d PWM引脚: GPIO%d", i, s_schedule.pwm_pins[i]);
-   }
-   LIGHT_LOGI("频率: %d Hz", PWM_FREQUENCY_HZ);
-   LIGHT_LOGI("分辨率: 12位 (0-%d)", PWM_MAX_DUTY);
-   LIGHT_LOGI("最小占空比: %d%%", PWM_MIN_DUTY_PERCENT);
-   
+
+   LIGHT_LOGI("PWM初始化完成 (单通道 GPIO%d, %dHz, 12bit)",
+              s_schedule.pwm_pins[0], PWM_FREQUENCY_HZ);
    return true;
 }
 
@@ -312,26 +263,21 @@ static bool fan_init(void) {
    return true;
 }
 
-// 初始化补光灯控制模块（四通道）
+// ========== 初始化函数改为单通道 ==========
 void light_control_init(const int pwm_pins[LIGHT_CHANNEL_COUNT], int fan_pin) {
-   // 复制引脚配置
    for (int i = 0; i < LIGHT_CHANNEL_COUNT; i++) {
       s_schedule.pwm_pins[i] = pwm_pins[i];
-   }  
-   s_schedule.fan_pin = fan_pin;
-   
-   // 初始化PWM
+   }
+   s_schedule.fan_pin = fan_pin;  // -1 表示不在此模块管理风扇
    pwm_init();
    
-   // 初始化散热风扇
-   fan_init();
-   
-   LIGHT_LOGI("四通道补光灯控制模块初始化完成");
-   for (int i = 0; i < LIGHT_CHANNEL_COUNT; i++) {
-      LIGHT_LOGI("通道%d PWM调光引脚: GPIO%d", i, pwm_pins[i]);
+   // 如果 fan_pin >= 0 则初始化独立风扇 GPIO（向后兼容）
+   if (fan_pin >= 0) {
+      fan_init();
    }
-   LIGHT_LOGI("散热风扇控制引脚: GPIO%d", fan_pin);
-   LIGHT_LOGI("默认计划: %02d:%02d - %02d:%02d (%.1f小时)", 
+   LIGHT_LOGI("COB LED 控制模块初始化完成 (30W, 单通道)");
+   LIGHT_LOGI("PWM 调光引脚: GPIO%d", pwm_pins[0]);
+   LIGHT_LOGI("默认计划: %02d:%02d - %02d:%02d (%.1f小时)",
             s_schedule.start_hour, s_schedule.start_minute,
             s_schedule.end_hour, s_schedule.end_minute,
             s_schedule.duration_hours);
@@ -423,7 +369,7 @@ void light_control_update(void) {
       
       if (target_duty > 0) {
          if (s_current_state != LIGHT_STATE_PWM || s_current_pwm_duty != target_duty) {
-            if (set_all_channels_pwm_duty(target_duty)) {
+            if (set_pwm_duty(target_duty)) {
                s_current_state = LIGHT_STATE_PWM;
                // 开启散热风扇
                control_fan(true);
@@ -433,7 +379,7 @@ void light_control_update(void) {
       } else {
          // 如果计算出的占空比为0，则关闭
          if (s_current_state != LIGHT_STATE_OFF) {
-            if (set_all_channels_pwm_duty(0)) {
+            if (set_pwm_duty(0)) {
                s_current_state = LIGHT_STATE_OFF;
                // 关闭散热风扇
                control_fan(false);
@@ -444,7 +390,7 @@ void light_control_update(void) {
    } else {
       // 应该关闭
       if (s_current_state != LIGHT_STATE_OFF) {
-         if (set_all_channels_pwm_duty(0)) {
+         if (set_pwm_duty(0)) {
             s_current_state = LIGHT_STATE_OFF;
             // 关闭散热风扇
             control_fan(false);
@@ -466,7 +412,7 @@ static void update_pwm_duty(void) {
    if (should_be_on && s_pwm_initialized) {
       uint8_t target_duty = calculate_auto_pwm_duty();
       if (target_duty != s_current_pwm_duty) {
-         set_all_channels_pwm_duty(target_duty);
+         set_pwm_duty(target_duty);
          LIGHT_LOGI("更新光照PWM: %d%%", target_duty);
       }
    }
@@ -493,7 +439,7 @@ void light_control_manual_set(bool on) {
    if (on) {
       s_current_state = LIGHT_STATE_ON;
       // 手动模式下，所有通道PWM设置为100%
-      if (set_all_channels_pwm_duty(100)) {
+      if (set_pwm_duty(100)) {
          // 开启散热风扇
          control_fan(true);
          LIGHT_LOGI("补光灯手动开启，所有通道PWM: 100%%，散热风扇开启");
@@ -501,7 +447,7 @@ void light_control_manual_set(bool on) {
    } else {
       s_current_state = LIGHT_STATE_OFF;
       // 关闭时，所有通道PWM设置为0
-      if (set_all_channels_pwm_duty(0)) {
+      if (set_pwm_duty(0)) {
          // 关闭散热风扇
          control_fan(false);
          LIGHT_LOGI("补光灯手动关闭，散热风扇关闭");

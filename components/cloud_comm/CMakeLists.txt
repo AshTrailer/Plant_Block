@@ -10,4 +10,5 @@ idf_component_register(
         esp-tls
         time_manager
         command_processor
+        event_bus
 )

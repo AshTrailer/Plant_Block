@@ -3,6 +3,7 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "event_bus.h"
 
 static const char *TAG = "FLOAT_SWITCH";
 
@@ -18,9 +19,9 @@ static uint32_t   s_interval_ms = 500;
 __attribute__((weak))
 void float_switch_on_state_changed(bool state)
 {
-   // 默认仅打日志，用户可在自己的 .c 中覆盖此函数
-   ESP_LOGI(TAG, "Float switch state changed: %s",
-            state ? "CLOSED (no water)" : "OPEN (water present)");
+   ESP_LOGI(TAG, "Float switch: %s", state ? "有水" : "缺水");
+   // 通过事件总线发布，irrigation_controller 可订阅
+   event_bus_publish(EVENT_SENSOR_FLOAT_SW, &state, sizeof(state));
 }
 
 // ---------- 监测任务 ----------

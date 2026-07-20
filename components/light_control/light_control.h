@@ -13,7 +13,7 @@ typedef enum {
 } light_state_t;
 
 // 定义通道数量
-#define LIGHT_CHANNEL_COUNT 4
+#define LIGHT_CHANNEL_COUNT 1
 
 // 初始化补光灯控制模块（四通道）
 void light_control_init(const int pwm_pins[LIGHT_CHANNEL_COUNT], int fan_pin);

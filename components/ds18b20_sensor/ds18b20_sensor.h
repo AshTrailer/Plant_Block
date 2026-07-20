@@ -110,4 +110,10 @@ void ds18b20_sensor_stop_reading(void);
  */
 void ds18b20_sensor_start_continuous(void);
 
+// 冷/热端语义映射（V2.0 专用）
+// 约定：先搜索到的为冷端 [0]，后搜索到的为热端 [1]
+// 如 ROM ID 顺序与预期不同，可调用以下函数重新指定
+void ds18b20_set_role(int index, const char *role);  // "cold" / "hot"
+const char *ds18b20_get_role(int index);
+
 #endif

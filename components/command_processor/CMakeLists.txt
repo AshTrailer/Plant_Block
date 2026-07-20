@@ -7,4 +7,8 @@ idf_component_register(
         irrigation_controller
         moisture_sensor
         cloud_comm
+        system_monitor
+        sht30_sensor
+        ds18b20_sensor
+        float_switch
 )

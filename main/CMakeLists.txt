@@ -15,4 +15,8 @@ idf_component_register(
         ds18b20_sensor
         sht30_sensor
         float_switch
+        pin_definitions
+        system_monitor
+        fan_control
+        vofa_output
 )

@@ -3,37 +3,26 @@
 #include "esp_log.h"
 #include <string.h>
 #include <stdlib.h>
-#include "cloud_comm.h"
+#include "pin_definitions.h"
+
+
 
 static const char *TAG = "GPIO_CONTROL";
 
-#define GPIO_LOGE(fmt, ...) do { \
-    ESP_LOGE(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[E] " fmt, ##__VA_ARGS__); \
-} while(0)
-
-#define GPIO_LOGW(fmt, ...) do { \
-    ESP_LOGW(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[W] " fmt, ##__VA_ARGS__); \
-} while(0)
-
-#define GPIO_LOGI(fmt, ...) do { \
-    ESP_LOGI(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[I] " fmt, ##__VA_ARGS__); \
-} while(0)
+#define GPIO_LOGE(fmt, ...) ESP_LOGE(TAG, fmt, ##__VA_ARGS__)
+#define GPIO_LOGW(fmt, ...) ESP_LOGW(TAG, fmt, ##__VA_ARGS__)
+#define GPIO_LOGI(fmt, ...) ESP_LOGI(TAG, fmt, ##__VA_ARGS__)
 
 // 初始化时配置的GPIO引脚列表
-//static const int s_managed_pins[] = {1, 3, 4, 5, 6, 7, 8, 9, 14, 15, 18};
 static const int s_managed_pins[] = {
-    2,   // COB 风扇
-    4,   // TEC 热端风扇
-    5,   // TEC 冷端风扇
-    12,  // 蠕动泵
-    13,  // 通风风扇
-    14,  // 光照 PWM
-    15,  // 土壤湿度传感器 VCC
-    18,  // TEC PWM_H
-    19   // TEC PWM_L
+    PIN_VENTILATION_FAN,    // 5
+    PIN_TEC_COLD_FAN,       // 17
+    PIN_IRRIGATION_PUMP,    // 16
+    PIN_COB_LED_PWM,        // 14
+    PIN_WATER_FAN_PWM,      // 18
+    PIN_MOISTURE_POWER,     // 32
+    PIN_TEC_PWM_H,          // 13
+    PIN_TEC_PWM_L,          // 27
 };
 static const int s_managed_pin_count = sizeof(s_managed_pins) / sizeof(s_managed_pins[0]);
 

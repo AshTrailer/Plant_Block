@@ -13,20 +13,9 @@
 
 static const char *TAG = "IRRIGATION";
 
-#define IRR_LOGI(fmt, ...) do { \
-    ESP_LOGI(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[I] " fmt, ##__VA_ARGS__); \
-} while(0)
-
-#define IRR_LOGE(fmt, ...) do { \
-    ESP_LOGE(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[E] " fmt, ##__VA_ARGS__); \
-} while(0)
-
-#define IRR_LOGW(fmt, ...) do { \
-    ESP_LOGW(TAG, fmt, ##__VA_ARGS__); \
-    cloud_comm_publish_log("[W] " fmt, ##__VA_ARGS__); \
-} while(0)
+#define IRR_LOGI(fmt, ...) ESP_LOGI(TAG, fmt, ##__VA_ARGS__)
+#define IRR_LOGE(fmt, ...) ESP_LOGE(TAG, fmt, ##__VA_ARGS__)
+#define IRR_LOGW(fmt, ...) ESP_LOGW(TAG, fmt, ##__VA_ARGS__)
 
 // 模块配置
 typedef struct {

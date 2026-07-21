@@ -29,18 +29,17 @@
 // ---------- 执行器 - NMOS 数字开关 ----------
 #define PIN_VENTILATION_FAN     5    // 通风风扇 SI2302 低端开关
 #define PIN_TEC_COLD_FAN        17   // TEC 冷端散热风扇 SI2302 低端开关
-#define PIN_IRRIGATION_PUMP     16   // 蠕动泵 SI2302 低端开关（PWM 调速）
+#define PIN_IRRIGATION_PUMP     16   // 蠕动泵 SI2302 低端开关
 
 // ---------- 执行器 - PWM ----------
 #define PIN_COB_LED_PWM         14   // COB LED 升压恒流驱动 PWM（XL6005E1 EN/DIM）
+#define PIN_COB_LED_POWER       12   // COB LED 升压恒流驱动 EN（高电平使能）
 #define PIN_WATER_FAN_PWM       18   // 水冷风扇 4 线 PWM 调速
 #define PIN_WATER_FAN_TACH      19   // 水冷风扇转速反馈 TACH（可选，脉冲计数）
 
 // ---------- TEC H 桥（Phase 3 实现）----------
 #define PIN_TEC_PWM_H           13   // IR2104 #1 高侧 / IR2104 #2 低侧（MCPWM）
 #define PIN_TEC_PWM_L           27   // IR2104 #1 低侧 / IR2104 #2 高侧（MCPWM）
-// 注：H 桥实际需要 4 个 PWM 信号，此处仅列出已知的两个。
-//     完整 TEC 引脚映射待原理图确认后补充。
 
 // ============================================================
 //  注意事项：

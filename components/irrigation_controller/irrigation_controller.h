@@ -12,8 +12,8 @@ void irrigation_controller_poll(void);
 // 设置触发阈值
 bool irrigation_controller_set_threshold(int threshold);
 
-// 设置单次浇水时长
-bool irrigation_controller_set_duration(float seconds);
+// 设置单次浇水体积
+bool irrigation_controller_set_volume(int volume_ml);
 
 // 设置周最小浇水次数
 bool irrigation_controller_set_week_min(int min_times);
@@ -23,7 +23,7 @@ bool irrigation_controller_set_week_max(int max_times);
 
 // 获取当前设置
 int irrigation_controller_get_threshold(void);
-float irrigation_controller_get_duration(void);
+int  irrigation_controller_get_volume(void);       // 返回 ml
 int irrigation_controller_get_week_min(void);
 int irrigation_controller_get_week_max(void);
 int irrigation_controller_get_week_count(void);

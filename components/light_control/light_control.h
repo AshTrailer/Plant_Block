@@ -15,8 +15,13 @@ typedef enum {
 // 定义通道数量
 #define LIGHT_CHANNEL_COUNT 1
 
-// 初始化补光灯控制模块（四通道）
-void light_control_init(const int pwm_pins[LIGHT_CHANNEL_COUNT], int fan_pin);
+/**
+ * @brief 初始化补光灯
+ * @param pwm_pins   PWM 引脚数组（单通道取 [0]）
+ * @param power_pin  电源使能引脚（-1 表示不需要独立电源控制）
+ */
+// 初始化补光灯控制模块
+void light_control_init(const int pwm_pins[LIGHT_CHANNEL_COUNT], int power_pin);
 
 // 补光灯状态轮询函数（需在主循环中定期调用）
 void light_control_poll(void);
@@ -29,6 +34,12 @@ bool light_control_set_end_time(int hour, int minute);
 
 // 设置补光灯的总照明时长（小时，支持小数，如3.4）
 bool light_control_set_duration(float hours);
+
+/** @brief 设置渐变上升时间比例（0-50，默认 30） */
+void light_control_set_ramp_up_ratio(int percent);
+
+/** @brief 设置渐变下降时间比例（0-50，默认 30） */
+void light_control_set_ramp_down_ratio(int percent);
 
 // 更新补光灯状态（需在主循环中定期调用）
 void light_control_update(void);
@@ -73,3 +84,4 @@ int light_control_get_pwm_pin(int channel);
 int light_control_get_fan_pin(void);
 
 #endif
+

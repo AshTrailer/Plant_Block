@@ -3,5 +3,5 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES 
         time_manager
-        cloud_comm
+        driver
 )

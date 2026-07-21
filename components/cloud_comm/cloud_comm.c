@@ -1,34 +1,29 @@
 #include "cloud_comm.h"
+#include "tls_config.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_netif_sntp.h"      // ← 新：替代 esp_sntp.h
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "mqtt_client.h"
-#include "esp_sntp.h"
+#include "esp_smartconfig.h"
 #include "time.h"
-#include "time_manager.h"
-#include "command_processor.h"
+#include "time_manager.h"        // ← 恢复
+#include "command_processor.h"   // ← 恢复
 #include "event_bus.h"
 #include <string.h>
 #include <stdio.h>
 
 static const char *TAG = "CLOUD_COMM";
 
-// WiFi 配置
-#define WIFI_SSID "USER_E0E87F"    // S24
-#define WIFI_PASS "71204483"    //12746088
-
-// MQTT 配置
-#define MQTT_BROKER_URI "mqtts://aelecti.top:8883"
-#define DEVICE_ID       "Plant_Block_dev02"   // 可改为从 NVS 读取
-
 // 事件组位
 #define WIFI_CONNECTED_BIT BIT0
 #define MQTT_CONNECTED_BIT BIT1
+#define WIFI_RETRY_MAX  3
 
 static EventGroupHandle_t s_event_group = NULL;
 
@@ -39,10 +34,10 @@ static bool s_mqtt_connected = false;
 // 消息回调
 static cloud_comm_msg_cb_t s_msg_cb = NULL;
 
-// 证书（来自 example.c）
-extern const char *server_cert;  // 定义在文件末尾
+// SmartConfig 完成标志（用于同步 smartconfig_task 和 wifi_init_sta）
+static bool s_smartconfig_done = false;
 
-// ------------------ 事件总线回调（放在 mqtt_event_handler 之前）------------------
+// ------------------ 事件总线回调 ------------------
 static void cloud_on_alarm_event(event_type_t type, const void *data, size_t len, void *ctx)
 {
    (void)type;
@@ -63,7 +58,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGW(TAG, "WiFi disconnected, trying to reconnect...");
-        s_mqtt_connected = false;  // MQTT 也会断开
+        s_mqtt_connected = false;
         esp_wifi_connect();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
@@ -72,7 +67,36 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
-// ------------------ SNTP 时间同步 ------------------
+// ------------------ SmartConfig 事件处理（v5.x 新版）------------------
+static void smartconfig_event_handler(void *arg, esp_event_base_t base,
+                                      int32_t event_id, void *event_data)
+{
+    if (base != SC_EVENT) return;
+
+    switch (event_id) {
+        case SC_EVENT_SCAN_DONE:
+            ESP_LOGI(TAG, "SmartConfig: Scan done");
+            break;
+        case SC_EVENT_FOUND_CHANNEL:
+            ESP_LOGI(TAG, "SmartConfig: Found channel");
+            break;
+        case SC_EVENT_GOT_SSID_PSWD: {
+            smartconfig_event_got_ssid_pswd_t *evt =
+                (smartconfig_event_got_ssid_pswd_t *)event_data;
+            ESP_LOGI(TAG, "SmartConfig: Got SSID=%s", evt->ssid);
+            // 凭据已自动保存到 NVS，WiFi 会自动开始连接
+            break;
+        }
+        case SC_EVENT_SEND_ACK_DONE:
+            ESP_LOGI(TAG, "SmartConfig: ACK sent, provisioning complete");
+            s_smartconfig_done = true;
+            break;
+        default:
+            break;
+    }
+}
+
+// ------------------ SNTP 时间同步（v5.x 新版 API）------------------
 static void time_sync_notification_cb(struct timeval *tv)
 {
     time_t now_utc = tv->tv_sec;
@@ -97,15 +121,15 @@ static void time_sync_notification_cb(struct timeval *tv)
 static void sync_time(void)
 {
     ESP_LOGI(TAG, "Initializing SNTP...");
-    esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
-    esp_sntp_setservername(0, "aelecti.top");
-    esp_sntp_set_time_sync_notification_cb(time_sync_notification_cb);
-    esp_sntp_init();
+
+    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("aelecti.top");
+    config.sync_cb = time_sync_notification_cb;
+    esp_netif_sntp_init(&config);
 
     int retry = 0;
-    while (esp_sntp_get_sync_status() == SNTP_SYNC_STATUS_RESET && ++retry <= 10) {
+    while (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(1000)) == ESP_ERR_TIMEOUT
+           && ++retry <= 10) {
         ESP_LOGI(TAG, "Waiting for time sync... (%d/10)", retry);
-        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
     if (retry > 10) {
@@ -125,13 +149,11 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             s_mqtt_connected = true;
             s_mqtt_client = event->client;
 
-            // 订阅命令 topic
             char cmd_topic[64];
             snprintf(cmd_topic, sizeof(cmd_topic), "device/%s/cmd", DEVICE_ID);
             esp_mqtt_client_subscribe(event->client, cmd_topic, 1);
             ESP_LOGI(TAG, "Subscribed to %s", cmd_topic);
 
-            // 发送上线通知（遗嘱会在异常断开时自动发送 offline）
             char status_topic[64];
             snprintf(status_topic, sizeof(status_topic), "registry/%s/status", DEVICE_ID);
             esp_mqtt_client_publish(event->client, status_topic, "online", 0, 1, 0);
@@ -151,7 +173,6 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
                 s_msg_cb(event->topic, event->topic_len, event->data, event->data_len);
             }
 
-            // 检查是否为命令主题
             char expected_topic[64];
             snprintf(expected_topic, sizeof(expected_topic), "device/%s/cmd", DEVICE_ID);
             if (event->topic_len == strlen(expected_topic) &&
@@ -175,61 +196,100 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             } else if (event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
                 ESP_LOGE(TAG, "Connection refused, return code: %d", event->error_handle->connect_return_code);
             }
-        break;
+            break;
 
         default:
             break;
     }
 }
 
-// ------------------ 初始化 WiFi ------------------
+// ------------------ SmartConfig 任务（v5.x 事件版）------------------
+static void smartconfig_task(void *arg)
+{
+   ESP_LOGI(TAG, "Starting SmartConfig (ESPTouch), waiting for 120s...");
+
+   // 注册 SmartConfig 事件
+   ESP_ERROR_CHECK(esp_event_handler_instance_register(
+       SC_EVENT, ESP_EVENT_ANY_ID,
+       &smartconfig_event_handler, NULL, NULL));
+
+   esp_smartconfig_set_type(SC_TYPE_ESPTOUCH);
+   smartconfig_start_config_t cfg = SMARTCONFIG_START_CONFIG_DEFAULT();
+   ESP_ERROR_CHECK(esp_smartconfig_start(&cfg));
+
+   // 等待 WiFi 连接成功或超时 120s
+   EventBits_t bits = xEventGroupWaitBits(s_event_group, WIFI_CONNECTED_BIT,
+                                          pdFALSE, pdFALSE, pdMS_TO_TICKS(120000));
+   if (bits & WIFI_CONNECTED_BIT) {
+      ESP_LOGI(TAG, "SmartConfig: WiFi connected successfully");
+   }
+
+   esp_smartconfig_stop();
+
+   // 注销 SmartConfig 事件
+   esp_event_handler_instance_unregister(SC_EVENT, ESP_EVENT_ANY_ID,
+                                         &smartconfig_event_handler);
+
+   ESP_LOGI(TAG, "SmartConfig task exiting");
+   vTaskDelete(NULL);
+}
+
+static bool wifi_connect_stored(void)
+{
+   wifi_config_t wifi_cfg = {0};
+   esp_err_t err = esp_wifi_get_config(WIFI_IF_STA, &wifi_cfg);
+   if (err != ESP_OK || strlen((char*)wifi_cfg.sta.ssid) == 0) {
+      ESP_LOGW(TAG, "No stored WiFi credentials");
+      return false;
+   }
+   ESP_LOGI(TAG, "Trying stored SSID: %s", wifi_cfg.sta.ssid);
+   esp_wifi_connect();
+   EventBits_t bits = xEventGroupWaitBits(s_event_group, WIFI_CONNECTED_BIT,
+                                          pdFALSE, pdFALSE, pdMS_TO_TICKS(15000));
+   return (bits & WIFI_CONNECTED_BIT) != 0;
+}
+
 static void wifi_init_sta(void)
 {
-    esp_netif_create_default_wifi_sta();
+   esp_netif_create_default_wifi_sta();
+   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+   ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+   ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                                       &wifi_event_handler, NULL, NULL));
+   ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                                       &wifi_event_handler, NULL, NULL));
+   ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+   ESP_ERROR_CHECK(esp_wifi_start());
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+   int retry = 0;
+   while (retry < WIFI_RETRY_MAX) {
+      if (wifi_connect_stored()) {
+         ESP_LOGI(TAG, "WiFi connected using stored credentials");
+         esp_wifi_set_ps(WIFI_PS_NONE);
+         return;
+      }
+      retry++;
+      ESP_LOGW(TAG, "WiFi attempt %d failed, retrying...", retry);
+   }
 
-    // 注册事件处理器
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &wifi_event_handler,
-                                                        NULL,
-                                                        NULL));
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
-                                                        IP_EVENT_STA_GOT_IP,
-                                                        &wifi_event_handler,
-                                                        NULL,
-                                                        NULL));
+   // 全部失败 → 启动 SmartConfig
+   ESP_LOGI(TAG, "Stored credentials failed, starting SmartConfig...");
+   xTaskCreate(smartconfig_task, "smartconfig", 4096, NULL, 3, NULL);
 
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = WIFI_SSID,
-            .password = WIFI_PASS,
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
-        },
-    };
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
-    ESP_ERROR_CHECK(esp_wifi_start());
-
-    // 等待 WiFi 连接（超时 30 秒）
-    EventBits_t bits = xEventGroupWaitBits(s_event_group, WIFI_CONNECTED_BIT,
-                                           pdFALSE, pdFALSE, pdMS_TO_TICKS(30000));
-    if (bits & WIFI_CONNECTED_BIT) {
-        ESP_LOGI(TAG, "WiFi connected");
-    } else {
-        ESP_LOGE(TAG, "WiFi connection timeout");
-    }
-
-    esp_wifi_set_ps(WIFI_PS_NONE);
-    ESP_LOGI(TAG, "WiFi power save disabled");
+   // 等待 SmartConfig 完成（最长 120s）
+   EventBits_t bits = xEventGroupWaitBits(s_event_group, WIFI_CONNECTED_BIT,
+                                          pdFALSE, pdFALSE, pdMS_TO_TICKS(120000));
+   if (bits & WIFI_CONNECTED_BIT) {
+      ESP_LOGI(TAG, "WiFi connected via SmartConfig");
+   } else {
+      ESP_LOGE(TAG, "SmartConfig timeout, WiFi not connected");
+   }
+   esp_wifi_set_ps(WIFI_PS_NONE);
 }
 
 // ------------------ 启动 MQTT ------------------
 static void mqtt_app_start(void)
 {
-    // 遗嘱消息配置：当设备异常断开时，发布 offline 到 registry/{deviceId}/status
     esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = MQTT_BROKER_URI,
         .broker.verification.certificate = server_cert,
@@ -253,10 +313,8 @@ static void mqtt_app_start(void)
 // ------------------ 公共接口 ------------------
 void cloud_comm_init(void)
 {
-    // 创建事件组
     s_event_group = xEventGroupCreate();
 
-    // 初始化 NVS（如果尚未初始化）
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -272,13 +330,8 @@ void cloud_comm_init(void)
 
 void cloud_comm_start(void)
 {
-    // 1. 连接 WiFi
     wifi_init_sta();
-
-    // 2. 同步时间
     sync_time();
-
-    // 3. 启动 MQTT
     mqtt_app_start();
 }
 
@@ -303,10 +356,9 @@ void cloud_comm_publish(const char *sub_topic, const char *data)
 void cloud_comm_publish_log(const char *format, ...)
 {
     if (!s_mqtt_connected || !s_mqtt_client) {
-        return; // 未连接时不发送
+        return;
     }
 
-    // 使用线程安全的接口获取时间字符串
     char time_str[64];
     time_manager_get_time_string_safe(time_str, sizeof(time_str));
     
@@ -329,68 +381,3 @@ void cloud_comm_register_msg_cb(cloud_comm_msg_cb_t callback)
 {
     s_msg_cb = callback;
 }
-
-// ------------------ 证书 ------------------
-const char *server_cert =
-    "-----BEGIN CERTIFICATE-----\n"
-    "MIIGADCCBOigAwIBAgIQDAYegfp3cU3tclpZFsVKODANBgkqhkiG9w0BAQsFADBu\n"
-    "MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3\n"
-    "d3cuZGlnaWNlcnQuY29tMS0wKwYDVQQDEyRFbmNyeXB0aW9uIEV2ZXJ5d2hlcmUg\n"
-    "RFYgVExTIENBIC0gRzIwHhcNMjYwMjAzMDAwMDAwWhcNMjYwNTAzMjM1OTU5WjAW\n"
-    "MRQwEgYDVQQDEwthZWxlY3RpLnRvcDCCASIwDQYJKoZIhvcNAQEBBQADggEPADCC\n"
-    "AQoCggEBAJyoPPQfX7kico1dul+2GDs7vHj7m/D6SOJ7OT4H4tZNTtep6HdKz3GJ\n"
-    "6isStzpcGoAYctosFX8w5XdDB3RPfsSHsytfk/ngZ4F1SqgZ8lQCdHkEjXCGOsJw\n"
-    "7YnGjDKG4Aiy6CDa2ISRvR2iN5d+kFKwJXSIhu/hzY7VUpXBfg62W1erhZ8peOZp\n"
-    "QHPbPmFiegO0dLJxwxf6ML29UGOpqqrEwWq+t7QuAihFrFTY4AFZgmPw8iBpvkFI\n"
-    "Vvffj9vm5/uOKYr8rfXGGmcBzj++D08VidhiiVD70HCY8fX3vpq6mc8yKi7MG7aj\n"
-    "wUp7kpcxjN55xw3ORXBXZcpuOZWJcK8CAwEAAaOCAvAwggLsMB8GA1UdIwQYMBaA\n"
-    "FHjfkZBf7t6s9sV169VMVVPvJEq2MB0GA1UdDgQWBBQAlOusYCsn7JpQkHb/DaxS\n"
-    "CsPdKDAnBgNVHREEIDAeggthZWxlY3RpLnRvcIIPd3d3LmFlbGVjdGkudG9wMD4G\n"
-    "A1UdIAQ3MDUwMwYGZ4EMAQIBMCkwJwYIKwYBBQUHAgEWG2h0dHA6Ly93d3cuZGln\n"
-    "aWNlcnQuY29tL0NQUzAOBgNVHQ8BAf8EBAMCBaAwHQYDVR0lBBYwFAYIKwYBBQUH\n"
-    "AwEGCCsGAQUFBwMCMIGABggrBgEFBQcBAQR0MHIwJAYIKwYBBQUHMAGGGGh0dHA6\n"
-    "Ly9vY3NwLmRpZ2ljZXJ0LmNvbTBKBggrBgEFBQcwAoY+aHR0cDovL2NhY2VydHMu\n"
-    "ZGlnaWNlcnQuY29tL0VuY3J5cHRpb25FdmVyeXdoZXJlRFZUTFNDQS1HMi5jcnQw\n"
-    "DAYDVR0TAQH/BAIwADCCAX8GCisGAQQB1nkCBAIEggFvBIIBawFpAHcAlpdkv1VY\n"
-    "l633Q4doNwhCd+nwOtX2pPM2bkakPw/KqcYAAAGcJBblFAAABAMASDBGAiEAo/CL\n"
-    "WDXY7xO4ygXdKuLU0jW9ek257oHIY7RDTrma8ecCIQDw5eumbOjLSz6+YLkdsssb\n"
-    "m1AKu9/HCg4iAyOFsiNwogB2ABaDLavwqSUPD/A6pUX/yL/II9CHS/YEKSf45x8z\n"
-    "E/X6AAABnCQW5QIAAAQDAEcwRQIgap8GdCMYOOnYKnxGyLTY4UwrYQ4Id3HL4/sN\n"
-    "/UtXthACIQDt+V90q2HHj8/97jsKrGhJ2peTSPAevgPWEG5/eFC8AgB2AGQRxGyk\n"
-    "EuyniRyiAi4AvKtPKAfUHjUnq+r+1QPJfc3wAAABnCQW5REAAAQDAEcwRQIhAPrW\n"
-    "LasIY5UxtzEqbkv6h9NaR0MXsreXAOP6h77CFU5RAiBhUcyXm0ti8fHRVGeDmZui\n"
-    "c8UPkYjYSmUtcSiLmAXG8zANBgkqhkiG9w0BAQsFAAOCAQEAkPVkaeH7KWpgVPBw\n"
-    "oie80iFhmsbIhC2asnusEugCU0wflq4l+YseWqjd3UCzBsT5a2JWhuzKGMJZNzMc\n"
-    "5+7EG5W3FqGFkKGF97NFeJiNHotTXEX1/NlueBRDoUbUu4PhQu8GLjF20B/q4qgH\n"
-    "ikYmsFiRbz0fcxB4PTxD/eK4NFDJFqvpv57GAAwfiht1n8akd4JkIqx+6g8TF0zH\n"
-    "ANlIF84r6tuEOaogLWAtyTRVgDXrIDkBaC+bJkNNtILdVgSrySBmfC2w7J+E36kZ\n"
-    "5im0kHFELUUapKw0ntDCiubgSJFj3xcjojch1M7IpVmviJCVJtMjHuLFTE1pJGPm\n"
-    "XpXQqQ==\n"
-    "-----END CERTIFICATE-----\n"
-    "-----BEGIN CERTIFICATE-----\n"
-    "MIIEqjCCA5KgAwIBAgIQDeD/te5iy2EQn2CMnO1e0zANBgkqhkiG9w0BAQsFADBh\n"
-    "MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3\n"
-    "d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBH\n"
-    "MjAeFw0xNzExMjcxMjQ2NDBaFw0yNzExMjcxMjQ2NDBaMG4xCzAJBgNVBAYTAlVT\n"
-    "MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j\n"
-    "b20xLTArBgNVBAMTJEVuY3J5cHRpb24gRXZlcnl3aGVyZSBEViBUTFMgQ0EgLSBH\n"
-    "MjCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAO8Uf46i/nr7pkgTDqnE\n"
-    "eSIfCFqvPnUq3aF1tMJ5hh9MnO6Lmt5UdHfBGwC9Si+XjK12cjZgxObsL6Rg1njv\n"
-    "NhAMJ4JunN0JGGRJGSevbJsA3sc68nbPQzuKp5Jc8vpryp2mts38pSCXorPR+sch\n"
-    "QisKA7OSQ1MjcFN0d7tbrceWFNbzgL2csJVQeogOBGSe/KZEIZw6gXLKeFe7mupn\n"
-    "NYJROi2iC11+HuF79iAttMc32Cv6UOxixY/3ZV+LzpLnklFq98XORgwkIJL1HuvP\n"
-    "ha8yvb+W6JislZJL+HLFtidoxmI7Qm3ZyIV66W533DsGFimFJkz3y0GeHWuSVMbI\n"
-    "lfsCAwEAAaOCAU8wggFLMB0GA1UdDgQWBBR435GQX+7erPbFdevVTFVT7yRKtjAf\n"
-    "BgNVHSMEGDAWgBROIlQgGJXm427mD/r6uRLtBhePOTAOBgNVHQ8BAf8EBAMCAYYw\n"
-    "HQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMBIGA1UdEwEB/wQIMAYBAf8C\n"
-    "AQAwNAYIKwYBBQUHAQEEKDAmMCQGCCsGAQUFBzABhhhodHRwOi8vb2NzcC5kaWdp\n"
-    "Y2VydC5jb20wQgYDVR0fBDswOTA3oDWgM4YxaHR0cDovL2NybDMuZGlnaWNlcnQu\n"
-    "Y29tL0RpZ2lDZXJ0R2xvYmFsUm9vdEcyLmNybDBMBgNVHSAERTBDMDcGCWCGSAGG\n"
-    "/WwBAjAqMCgGCCsGAQUFBwIBFhxodHRwczovL3d3dy5kaWdpY2VydC5jb20vQ1BT\n"
-    "MAgGBmeBDAECATANBgkqhkiG9w0BAQsFAAOCAQEAoBs1eCLKakLtVRPFRjBIJ9LJ\n"
-    "L0s8ZWum8U8/1TMVkQMBn+CPb5xnCD0GSA6L/V0ZFrMNqBirrr5B241OesECvxIi\n"
-    "98bZ90h9+q/X5eMyOD35f8YTaEMpdnQCnawIwiHx06/0BfiTj+b/XQih+mqt3ZXe\n"
-    "xNCJqKexdiB2IWGSKcgahPacWkk/BAQFisKIFYEqHzV974S3FAz/8LIfD58xnsEN\n"
-    "GfzyIDkH3JrwYZ8caPTf6ZX9M1GrISN8HnWTtdNCH2xEajRa/h9ZBXjUyFKQrGk2\n"
-    "n2hcLrfZSbynEC/pSw/ET7H5nWwckjmAJ1l9fcnbqkU/pf6uMQmnfl0JQjJNSg==\n"
-    "-----END CERTIFICATE-----\n";

@@ -24,9 +24,9 @@
 
 static const char *TAG = "MAIN";
 
-// ==================== Vofa+ 传感器数据发布任务 ====================
-static TaskHandle_t s_vofa_task_handle = NULL;
+static TaskHandle_t s_vofa_task_handle = NULL; 
 
+// ==================== Vofa+ 传感器数据发布任务 ====================
 static void vofa_sensor_task(void *arg)
 {
    (void)arg;
@@ -41,8 +41,9 @@ static void vofa_sensor_task(void *arg)
       ds18b20_sensor_get_temperature(0, &ds18_cold);
       ds18b20_sensor_get_temperature(1, &ds18_hot);
 
-      float moist_pct = moisture_sensor_get_humidity_percent();
-      uint32_t moist_mv = moisture_sensor_get_calibrated_voltage();
+      // 湿度传感器由 irrigation_controller 按需读取，此处不再轮询
+      float moist_pct = 0.0f;
+      uint32_t moist_mv = 0;
 
       bool has_water = float_switch_get_state();
       bool ntc_overtemp = (gpio_get_level(PIN_NTC_OVERTEMP) == 1);
@@ -50,7 +51,6 @@ static void vofa_sensor_task(void *arg)
       bool light_on = light_control_is_on();
       uint8_t light_duty = light_control_get_pwm_duty();
 
-      // 蠕动泵简单开关状态（irrigation_controller 内部管理，暂无查询接口）
       bool pump_on = false;
       uint8_t pump_speed = 0;
 
@@ -109,7 +109,7 @@ void app_main(void)
    ventilation_control_start();
 
    const int light_pins[LIGHT_CHANNEL_COUNT] = { PIN_COB_LED_PWM };
-   light_control_init(light_pins, -1);  // COB 散热由 fan_control 管理
+   light_control_init(light_pins, PIN_COB_LED_POWER);  // 传入电源引脚
 
    irrigation_controller_init(PIN_IRRIGATION_PUMP);
 

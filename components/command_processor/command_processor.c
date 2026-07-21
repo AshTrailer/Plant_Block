@@ -203,9 +203,9 @@ static void cmd_irrigation(int argc, char *argv[])
       return;
    }
    if (strcmp(argv[1], "status") == 0) {
-      cmd_log("阈值=%d%% 时长=%.1fs 周min=%d 周max=%d 本周=%d/%d",
+      cmd_log("阈值=%d%% 水量=%dml 周min=%d 周max=%d 本周=%d/%d",
               irrigation_controller_get_threshold(),
-              irrigation_controller_get_duration(),
+              irrigation_controller_get_volume(),
               irrigation_controller_get_week_min(),
               irrigation_controller_get_week_max(),
               irrigation_controller_get_week_count(),
@@ -215,14 +215,14 @@ static void cmd_irrigation(int argc, char *argv[])
    if (strcmp(argv[1], "set") == 0 && argc >= 4) {
       if (strcmp(argv[2], "threshold") == 0) {
          irrigation_controller_set_threshold(atoi(argv[3]));
-      } else if (strcmp(argv[2], "duration") == 0) {
-         irrigation_controller_set_duration(atof(argv[3]));
+      } else if (strcmp(argv[2], "volume") == 0) {
+         irrigation_controller_set_volume(atoi(argv[3]));
       } else if (strcmp(argv[2], "week_min") == 0) {
          irrigation_controller_set_week_min(atoi(argv[3]));
       } else if (strcmp(argv[2], "week_max") == 0) {
          irrigation_controller_set_week_max(atoi(argv[3]));
       } else {
-         cmd_log("用法: irrigation set <threshold|duration|week_min|week_max> <value>");
+         cmd_log("用法: irrigation set <threshold|volume|week_min|week_max> <value>");
          return;
       }
       cmd_log("已设置");
@@ -332,6 +332,7 @@ static const cmd_entry_t s_command_table[] = {
    CMD_ENTRY(ds18b20,     "ds18b20",                     "DS18B20 温度查询"),
    CMD_ENTRY(sht30,       "sht30",                       "SHT30 温湿度查询"),
    CMD_ENTRY(ventilation, "ventilation <status>",        "通风控制状态"),
+   CMD_ENTRY(system,      "system <status|health>",      "系统状态与健康检查"),
    { NULL, NULL, NULL, NULL }  // 哨兵
 };
 

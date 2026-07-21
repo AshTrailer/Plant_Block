@@ -8,7 +8,8 @@ idf_component_register(
         esp_netif
         nvs_flash
         esp-tls
+        event_bus
+        tls_config
         time_manager
         command_processor
-        event_bus
 )

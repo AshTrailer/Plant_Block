@@ -83,4 +83,15 @@ uint32_t moisture_sensor_get_calibrated_voltage(void);
  */
 float moisture_sensor_get_humidity_percent(void);
 
+/**
+ * @brief 单次稳定湿度读取（自动上电→稳定→采样→断电）
+ *
+ * 流程：上电 → 等待 5s → 每秒采 1 个样本共 30 个 → 去极值 →
+ *       移动平均 → 标准差校验 → 返回结果
+ *
+ * @param humidity_percent 输出湿度百分比（0-100%）
+ * @return true 数据稳定有效，false 采样失败
+ */
+bool moisture_sensor_read_stable(float *humidity_percent);
+
 #endif

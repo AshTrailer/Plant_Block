@@ -17,10 +17,9 @@ static const char *TAG = "MOISTURE_SENSOR";
 #define MOISTURE_LOGW(fmt, ...) ESP_LOGW(TAG, fmt, ##__VA_ARGS__)
 #define MOISTURE_LOGE(fmt, ...) ESP_LOGE(TAG, fmt, ##__VA_ARGS__)
 
-
 // 硬件配置
-static int s_power_pin = 15;
-static int s_adc_pin = 2;
+static int s_power_pin = 32;
+static int s_adc_pin = 35;
 static adc_oneshot_unit_handle_t s_adc_handle = NULL;
 static adc_cali_handle_t s_adc_cali_handle = NULL;
 static TaskHandle_t s_read_task_handle = NULL;
@@ -49,6 +48,10 @@ static float s_b = 0.0f;
 // 采样配置
 #define SAMPLE_COUNT 10
 #define MAX_RETRY 3
+
+#define STABLE_SAMPLE_COUNT   30      // 采集 30 个样本
+#define STABLE_WAIT_SEC       5       // 上电后等待 5 秒
+#define STABLE_STDDEV_THRESH  2.0f    // 标准差阈值（%）
 
 // ADC 校准初始化（eFuse）
 static bool adc_calibration_init(void) {
@@ -440,4 +443,85 @@ uint32_t moisture_sensor_get_calibrated_voltage(void) {
 float moisture_sensor_get_humidity_percent(void) {
     uint32_t volt_cal = moisture_sensor_get_calibrated_voltage(); // 未校准时返回原始eFuse电压
     return calculate_humidity_percent(volt_cal);
+}
+
+// ========== 单次稳定读取（供 irrigation_controller 调用）==========
+bool moisture_sensor_read_stable(float *humidity_percent)
+{
+   if (humidity_percent == NULL) return false;
+
+   bool was_powered = s_is_powered;
+
+   // 1. 上电
+   if (!was_powered) {
+      moisture_sensor_power_on();
+      MOISTURE_LOGI("等待 %d 秒稳定...", STABLE_WAIT_SEC);
+      vTaskDelay(pdMS_TO_TICKS(STABLE_WAIT_SEC * 1000));
+   } else {
+      // 已上电也稍等，确保读数稳定
+      vTaskDelay(pdMS_TO_TICKS(1000));
+   }
+
+   // 2. 采集样本
+   int raw_samples[STABLE_SAMPLE_COUNT];
+   float hum_samples[STABLE_SAMPLE_COUNT];
+   int valid_count = 0;
+
+   MOISTURE_LOGI("开始采集 %d 个样本 (1s 间隔)...", STABLE_SAMPLE_COUNT);
+   for (int i = 0; i < STABLE_SAMPLE_COUNT; i++) {
+      uint32_t volt_efuse = adc_read_voltage_efuse();
+      uint32_t volt_cal = apply_secondary_calibration(volt_efuse);
+      float hum = calculate_humidity_percent(volt_cal);
+      raw_samples[i] = (int)volt_cal;  // 存校准后电压用于去极值
+      hum_samples[i] = hum;
+      vTaskDelay(pdMS_TO_TICKS(1000));
+   }
+
+   // 3. 去极值（去掉最大最小各 3 个）
+   int filtered[STABLE_SAMPLE_COUNT];
+   valid_count = data_processor_remove_outliers(raw_samples, STABLE_SAMPLE_COUNT,
+                                                 filtered, 3);
+   if (valid_count < 10) {
+      MOISTURE_LOGE("去极值后有效样本不足 (%d < 10)", valid_count);
+      if (!was_powered) moisture_sensor_power_off();
+      return false;
+   }
+
+   // 4. 计算平均值和标准差
+   float mean = data_processor_mean(filtered, valid_count);
+   float stddev = data_processor_stddev(filtered, valid_count);
+
+   // 均值接近 0 时的保护
+   if (mean < 0.01f) {
+      if (stddev < 0.01f) {
+         *humidity_percent = 0.0f;
+      } else {
+         MOISTURE_LOGE("均值接近0但标准差非零，数据异常");
+         if (!was_powered) moisture_sensor_power_off();
+         return false;
+      }
+   } else {
+      float stddev_pct = (stddev / mean) * 100.0f;
+      MOISTURE_LOGI("稳定读取: mean=%.1f mV, stddev=%.1f (%.2f%%)",
+                    mean, stddev, stddev_pct);
+
+      if (stddev_pct > STABLE_STDDEV_THRESH) {
+         MOISTURE_LOGE("标准差 %.2f%% 超过阈值 %.2f%%，数据不稳定",
+                       stddev_pct, STABLE_STDDEV_THRESH);
+         if (!was_powered) moisture_sensor_power_off();
+         return false;
+      }
+
+      // 将平均电压转换为湿度
+      *humidity_percent = calculate_humidity_percent((uint32_t)mean);
+   }
+
+   MOISTURE_LOGI("稳定读取完成: 湿度 = %.1f%%", *humidity_percent);
+
+   // 5. 恢复电源状态
+   if (!was_powered) {
+      moisture_sensor_power_off();
+   }
+
+   return true;
 }

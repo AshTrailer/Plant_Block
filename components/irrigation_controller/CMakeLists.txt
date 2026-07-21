@@ -6,4 +6,5 @@ idf_component_register(
         time_manager
         moisture_sensor
         cloud_comm
+        float_switch
 )

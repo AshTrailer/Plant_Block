@@ -19,4 +19,5 @@ idf_component_register(
         system_monitor
         fan_control
         vofa_output
+        tec_controller
 )

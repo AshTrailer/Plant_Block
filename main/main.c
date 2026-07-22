@@ -3,7 +3,7 @@
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "driver/uart.h"
-
+#include "tec_controller.h"
 #include "pin_definitions.h"
 #include "time_manager.h"
 #include "input_parser.h"
@@ -32,35 +32,27 @@ static void vofa_sensor_task(void *arg)
    (void)arg;
    vTaskDelay(pdMS_TO_TICKS(3000));
    ESP_LOGI(TAG, "Vofa sensor task started");
-
    while (1) {
       float sht30_t = 0, sht30_h = 0;
       sht30_sensor_get_data(&sht30_t, &sht30_h);
-
       float ds18_cold = -999, ds18_hot = -999;
-      ds18b20_sensor_get_temperature(0, &ds18_cold);
-      ds18b20_sensor_get_temperature(1, &ds18_hot);
-
+      ds18b20_sensor_get_temperature_cached(0, &ds18_cold);   // ← 改用 cached
+      ds18b20_sensor_get_temperature_cached(1, &ds18_hot);    // ← 改用 cached
       // 湿度传感器由 irrigation_controller 按需读取，此处不再轮询
       float moist_pct = 0.0f;
       uint32_t moist_mv = 0;
-
       bool has_water = float_switch_get_state();
       bool ntc_overtemp = (gpio_get_level(PIN_NTC_OVERTEMP) == 1);
-
       bool light_on = light_control_is_on();
       uint8_t light_duty = light_control_get_pwm_duty();
-
       bool pump_on = false;
       uint8_t pump_speed = 0;
-
       vofa_output_send_sensor_frame(sht30_t, sht30_h,
                                     ds18_cold, ds18_hot,
                                     moist_pct, moist_mv,
                                     has_water, ntc_overtemp,
                                     light_duty, light_on,
                                     pump_speed, pump_on);
-
       vTaskDelay(pdMS_TO_TICKS(1000));
    }
 }
@@ -112,6 +104,10 @@ void app_main(void)
    light_control_init(light_pins, PIN_COB_LED_POWER);  // 传入电源引脚
 
    irrigation_controller_init(PIN_IRRIGATION_PUMP);
+
+   // ---- TEC 温度控制 ----
+   ESP_LOGI(TAG, "[7.5/9] Initializing TEC Controller...");
+   tec_controller_init();
 
    // ---- 云端通信 ----
    ESP_LOGI(TAG, "[8/9] Initializing Cloud Communication...");

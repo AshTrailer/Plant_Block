@@ -11,4 +11,5 @@ idf_component_register(
         sht30_sensor
         ds18b20_sensor
         float_switch
+        tec_controller
 )

@@ -3,6 +3,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
+#include "freertos/semphr.h"
 #include "i2c_bus.h"
 #include "sht3x.h"
 #include "cloud_comm.h"
@@ -36,11 +37,12 @@ static TimerHandle_t      s_timer = NULL;
 static sht30_data_cb_t    s_callback = NULL;
 static void              *s_user_ctx = NULL;
 
-static volatile float     s_last_temp = 0.0f;
-static volatile float     s_last_humidity = 0.0f;
-static volatile bool      s_data_valid = false;
 static volatile bool      s_running = false;
 
+static float             s_last_temp = 0.0f;
+static float             s_last_humidity = 0.0f;
+static bool              s_data_valid = false;
+static SemaphoreHandle_t s_data_mutex = NULL;
 // ---------- 工作线程 ----------
 static void sht30_worker_task(void *arg)
 {
@@ -59,12 +61,13 @@ static void sht30_worker_task(void *arg)
       esp_err_t err = sht3x_get_humiture(s_sht3x, &temp, &hum);
 
       if (err == ESP_OK) {
+         xSemaphoreTake(s_data_mutex, portMAX_DELAY);
          s_last_temp = temp;
          s_last_humidity = hum;
          s_data_valid = true;
+         xSemaphoreGive(s_data_mutex);
 
          SHT30_LOGI("Temperature: %.2f °C, Humidity: %.2f %%RH", temp, hum);
-
          if (s_callback) {
             s_callback(temp, hum, s_user_ctx);
          }
@@ -119,6 +122,12 @@ void sht30_sensor_init(int sda_pin, int scl_pin)
       return;
    }
    SHT30_LOGI("Sensor initialized, periodic mode: 1 measurement/sec, medium repeatability");
+
+   s_data_mutex = xSemaphoreCreateMutex();
+   if (s_data_mutex == NULL) {
+      SHT30_LOGE("Failed to create mutex");
+      return;
+   }
 
    // --- 4. 创建工作线程 ---
    xTaskCreate(

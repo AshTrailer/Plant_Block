@@ -10,6 +10,7 @@
 #include "sht30_sensor.h"
 #include "ds18b20_sensor.h"
 #include "float_switch.h"
+#include "tec_controller.h"
 #include "event_bus.h"
 #include <string.h>
 #include <stdio.h>
@@ -267,7 +268,7 @@ static void cmd_ds18b20(int argc, char *argv[])
    cmd_log("DS18B20: %d device(s)", count);
    float temps[2] = {0};
    for (int i = 0; i < count && i < 2; i++) {
-      ds18b20_sensor_get_temperature(i, &temps[i]);
+      ds18b20_sensor_get_temperature_cached(i, &temps[i]);  // ← 改用 cached
    }
    if (count >= 1) cmd_log("  [0] cold_side: %.2f °C", temps[0]);
    if (count >= 2) cmd_log("  [1] hot_side:  %.2f °C", temps[1]);
@@ -319,6 +320,48 @@ static void cmd_system(int argc, char *argv[])
    }
 }
 
+// ==================== TEC 命令 ====================
+static void cmd_tec(int argc, char *argv[])
+{
+   if (argc < 2) {
+      cmd_log("用法: tec <identify|set <temp>|status|stop|manual <duty>|auto>");
+      return;
+   }
+
+   if (strcmp(argv[1], "identify") == 0) {
+      tec_controller_start_identification();
+      cmd_log("TEC 辨识已启动（异步）");
+   } else if (strcmp(argv[1], "set") == 0 && argc >= 3) {
+      float t = atof(argv[2]);
+      tec_controller_set_target(t);
+      cmd_log("TEC 目标温度: %.2f °C", t);
+   } else if (strcmp(argv[1], "status") == 0) {
+      cmd_log("状态: %s", tec_controller_get_state_str());
+      cmd_log("占空比: %.1f%% (u=%.1f%%)", tec_controller_get_duty(), tec_controller_get_u());
+      const tec_ident_result_t *id = tec_controller_get_ident_result();
+      if (id) {
+         cmd_log("辨识: u_cool=%.1f u_heat=%.1f T_range=[%.1f,%.1f]",
+                 id->u_cool_max, id->u_heat_max, id->T_min, id->T_max);
+         cmd_log("PI: Kc=%.4f Ti=%.1fs K=%.4f τ=%.1fs θ=%.1fs",
+                 id->Kc, id->Ti, id->K, id->tau, id->theta);
+      } else {
+         cmd_log("辨识: 未完成");
+      }
+   } else if (strcmp(argv[1], "stop") == 0) {
+      tec_controller_emergency_stop();
+      cmd_log("TEC 紧急停止");
+   } else if (strcmp(argv[1], "manual") == 0 && argc >= 3) {
+      float duty = atof(argv[2]);
+      tec_controller_set_manual_duty(duty);
+      cmd_log("TEC 手动占空比: %.1f%%", duty);
+   } else if (strcmp(argv[1], "auto") == 0) {
+      tec_controller_resume_auto();
+      cmd_log("TEC 恢复自动模式");
+   } else {
+      cmd_log("用法: tec <identify|set <temp>|status|stop|manual <duty>|auto>");
+   }
+}
+
 // ==================== 命令表 ====================
 #define CMD_ENTRY(name, usage, help_text) { #name, cmd_##name, usage, help_text }
 
@@ -332,6 +375,7 @@ static const cmd_entry_t s_command_table[] = {
    CMD_ENTRY(ds18b20,     "ds18b20",                     "DS18B20 温度查询"),
    CMD_ENTRY(sht30,       "sht30",                       "SHT30 温湿度查询"),
    CMD_ENTRY(ventilation, "ventilation <status>",        "通风控制状态"),
+   CMD_ENTRY(tec,         "tec <identify|set|status|stop|manual|auto>", "TEC温度控制"),
    CMD_ENTRY(system,      "system <status|health>",      "系统状态与健康检查"),
    { NULL, NULL, NULL, NULL }  // 哨兵
 };

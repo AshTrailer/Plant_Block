@@ -464,7 +464,6 @@ bool moisture_sensor_read_stable(float *humidity_percent)
 
    // 2. 采集样本
    int raw_samples[STABLE_SAMPLE_COUNT];
-   float hum_samples[STABLE_SAMPLE_COUNT];
    int valid_count = 0;
 
    MOISTURE_LOGI("开始采集 %d 个样本 (1s 间隔)...", STABLE_SAMPLE_COUNT);
@@ -473,7 +472,6 @@ bool moisture_sensor_read_stable(float *humidity_percent)
       uint32_t volt_cal = apply_secondary_calibration(volt_efuse);
       float hum = calculate_humidity_percent(volt_cal);
       raw_samples[i] = (int)volt_cal;  // 存校准后电压用于去极值
-      hum_samples[i] = hum;
       vTaskDelay(pdMS_TO_TICKS(1000));
    }
 

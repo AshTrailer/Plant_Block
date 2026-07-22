@@ -116,4 +116,16 @@ void ds18b20_sensor_start_continuous(void);
 void ds18b20_set_role(int index, const char *role);  // "cold" / "hot"
 const char *ds18b20_get_role(int index);
 
+/**
+ * @brief 获取缓存中的温度（线程安全，不操作总线）
+ * 
+ * 前提：连续采集（start_continuous 或 start_reading）已在运行。
+ * worker 每次读取成功后更新内部缓存，此函数直接返回缓存值。
+ * 
+ * @param index       设备索引
+ * @param temperature 输出温度值（℃）
+ * @return true 缓存有效，false 尚未有数据或索引无效
+ */
+bool ds18b20_sensor_get_temperature_cached(int index, float *temperature);
+
 #endif

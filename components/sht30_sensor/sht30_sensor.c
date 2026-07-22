@@ -44,12 +44,12 @@ static float             s_last_humidity = 0.0f;
 static bool              s_data_valid = false;
 static SemaphoreHandle_t s_data_mutex = NULL;
 // ---------- 工作线程 ----------
+// ========== 工作线程 ==========
 static void sht30_worker_task(void *arg)
 {
    SHT30_LOGI("Worker task started, waiting for trigger...");
 
    while (1) {
-      // 等待定时器通知
       ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
       if (!s_running) {
@@ -60,19 +60,23 @@ static void sht30_worker_task(void *arg)
       float hum = 0.0f;
       esp_err_t err = sht3x_get_humiture(s_sht3x, &temp, &hum);
 
+      xSemaphoreTake(s_data_mutex, portMAX_DELAY);
       if (err == ESP_OK) {
-         xSemaphoreTake(s_data_mutex, portMAX_DELAY);
          s_last_temp = temp;
          s_last_humidity = hum;
          s_data_valid = true;
-         xSemaphoreGive(s_data_mutex);
+      } else {
+         /* ← 关键：失败时立即标记无效，避免假在线 */
+         s_data_valid = false;
+         SHT30_LOGE("Read failed (err=%d)", err);
+      }
+      xSemaphoreGive(s_data_mutex);
 
+      if (err == ESP_OK) {
          SHT30_LOGI("Temperature: %.2f °C, Humidity: %.2f %%RH", temp, hum);
          if (s_callback) {
             s_callback(temp, hum, s_user_ctx);
          }
-      } else {
-         SHT30_LOGE("Read failed (err=%d)", err);
       }
    }
 }
@@ -181,14 +185,23 @@ void sht30_sensor_stop(void)
    SHT30_LOGI("Reading stopped");
 }
 
+// ========== sht30_sensor_get_data 加锁 ==========
 bool sht30_sensor_get_data(float *temperature, float *humidity)
 {
-   if (!s_data_valid || temperature == NULL || humidity == NULL) {
+   if (temperature == NULL || humidity == NULL) {
       return false;
    }
-   *temperature = s_last_temp;
-   *humidity = s_last_humidity;
-   return true;
+   if (s_data_mutex == NULL) {
+      return false;
+   }
+   xSemaphoreTake(s_data_mutex, portMAX_DELAY);
+   bool valid = s_data_valid;
+   if (valid) {
+      *temperature = s_last_temp;
+      *humidity = s_last_humidity;
+   }
+   xSemaphoreGive(s_data_mutex);
+   return valid;
 }
 
 void sht30_sensor_set_callback(sht30_data_cb_t callback, void *user_ctx)

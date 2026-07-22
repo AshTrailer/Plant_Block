@@ -133,15 +133,35 @@ static void read_all_and_notify(ds18b20_temp_cb_t callback, void *user_ctx)
 }
 
 /* ---------- 执行一次完整的"触发 → 等待 → 读取"循环 ---------- */
+/* ---------- 执行一次完整的"触发 → 等待 → 读取"循环 ---------- */
 static void do_one_cycle(void)
 {
    if (onewire_bus_reset(s_bus) != ESP_OK) {
       DS18B20_LOGE("Worker: bus reset failed (no presence)");
+
+      /* ← 总线故障：所有设备标记为无效 */
+      if (s_cache_mutex != NULL) {
+         xSemaphoreTake(s_cache_mutex, portMAX_DELAY);
+         for (int i = 0; i < s_device_count; i++) {
+            s_cached_valid[i] = false;
+         }
+         xSemaphoreGive(s_cache_mutex);
+      }
       return;
    }
+
    uint8_t conv_cmd[] = {0xCC, 0x44};
    if (onewire_bus_write_bytes(s_bus, conv_cmd, sizeof(conv_cmd)) != ESP_OK) {
       DS18B20_LOGE("Worker: Skip ROM + Convert T failed");
+
+      /* ← Convert T 失败：所有设备标记为无效 */
+      if (s_cache_mutex != NULL) {
+         xSemaphoreTake(s_cache_mutex, portMAX_DELAY);
+         for (int i = 0; i < s_device_count; i++) {
+            s_cached_valid[i] = false;
+         }
+         xSemaphoreGive(s_cache_mutex);
+      }
       return;
    }
 

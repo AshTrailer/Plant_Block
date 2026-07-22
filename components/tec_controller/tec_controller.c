@@ -40,6 +40,7 @@
 #define TEC_COOLDOWN_MAX_WAIT_SEC 1200    /* 回温最大等待 20 分钟 */
 #define TEC_TEMP_RATE_THRESHOLD   0.0083f /* 0.5°C/min ≈ 0.0083°C/s */
 #define TEC_MA_FILTER_LEN         10      /* 移动平均窗口 */
+#define TEC_SENSOR_OFFLINE_THRESHOLD  5    /* 连续 5 秒无有效数据 → 视为硬件故障 */
 
 #define TAG "TEC_CTRL"
 
@@ -91,6 +92,10 @@ static float                s_target_temp = 25.0f;
 static tec_ident_result_t   s_ident;
 static TaskHandle_t         s_task_handle = NULL;
 static SemaphoreHandle_t    s_mutex = NULL;
+
+/* 传感器连续离线计数器（用于短时故障容忍） */
+static int s_sht30_offline_cnt = 0;
+static int s_ds18_offline_cnt[2] = {0, 0};
 
 /* 传感器缓存（由控制任务每秒更新） */
 static float s_sht30_temp = 0.0f;
@@ -195,27 +200,53 @@ static void tec_set_raw_duty(float duty_pct)
 }
 
 /* ================================================================
+ *  检查是否有传感器达到硬件故障阈值（连续离线超限）
+ *  返回 true 表示至少一个传感器已确认离线
+ * ================================================================ */
+static bool tec_is_any_sensor_fault(void)
+{
+   if (s_sht30_offline_cnt >= TEC_SENSOR_OFFLINE_THRESHOLD) {
+      TEC_LOGE("SHT30 offline for %d seconds → FAULT", s_sht30_offline_cnt);
+      return true;
+   }
+   for (int i = 0; i < 2; i++) {
+      if (s_ds18_offline_cnt[i] >= TEC_SENSOR_OFFLINE_THRESHOLD) {
+         TEC_LOGE("DS18B20[%d] offline for %d seconds → FAULT", i, s_ds18_offline_cnt[i]);
+         return true;
+      }
+   }
+   return false;
+}
+
+/* ================================================================
  *  读取所有传感器（由控制任务调用）
  * ================================================================ */
 static bool tec_read_sensors(void)
 {
-   /* SHT30 — 读缓存，无竞争 */
+   /* SHT30 — 读缓存 */
    float t, h;
    s_sht30_valid = sht30_sensor_get_data(&t, &h);
    if (s_sht30_valid) {
       s_sht30_temp = t;
+      s_sht30_offline_cnt = 0;     /* ← 有效则清零 */
+   } else {
+      s_sht30_offline_cnt++;        /* ← 无效则累加 */
    }
-   /* DS18B20 × 2 — 使用缓存接口，零总线操作 */
+
+   /* DS18B20 × 2 — 缓存接口 */
    for (int i = 0; i < 2; i++) {
       float temp;
       bool ok = ds18b20_sensor_get_temperature_cached(i, &temp);
       if (ok && temp > -55.0f && temp < 125.0f) {
          s_ds18_temp[i] = temp;
          s_ds18_valid[i] = true;
+         s_ds18_offline_cnt[i] = 0;       /* ← 有效清零 */
       } else {
          s_ds18_valid[i] = false;
+         s_ds18_offline_cnt[i]++;          /* ← 无效累加 */
       }
    }
+
    return s_sht30_valid && s_ds18_valid[0] && s_ds18_valid[1];
 }
 
@@ -306,24 +337,40 @@ static bool tec_check_temp_stable_rate(const ma_filter_t *f, float threshold_c_p
  * ================================================================ */
 static void tec_pi_control(void)
 {
+   /* ---------- 0. 基础有效性 ---------- */
    if (!s_ident.valid || !s_pi_enabled) return;
+
+   /* ---------- 1. SHT30 离线：跳过本次 PI ---------- */
    if (!s_sht30_valid) {
       TEC_LOGW("SHT30 invalid → PI skipped");
       return;
    }
 
+   /* ---------- 2. DS18B20 离线：失去散热器温度监控，主动降功率 ---------- */
+   if (!s_ds18_valid[s_ident.ds18_hot_idx] || !s_ds18_valid[s_ident.ds18_cold_idx]) {
+      TEC_LOGW("DS18B20 offline → reducing output to safe level");
+      float u = s_duty - 50.0f;
+      if (u > 0) {
+         tec_set_raw_duty(50.0f + u * 0.5f);   // 正向减半
+      } else if (u < 0) {
+         tec_set_raw_duty(50.0f + u * 0.5f);   // 负向减半（值更接近50%）
+      }
+      return;
+   }
+
+   /* ---------- 以下是你原来的 PI 逻辑（不变） ---------- */
    float Ts = (float)TEC_PI_INTERVAL_SEC;
    float e = s_target_temp - s_sht30_temp;
 
-   /* 动态限幅 */
-   float u_lim_pos = 50.0f;  /* 默认 ±50% */
+   // 动态限幅
+   float u_lim_pos = 50.0f;
    float u_lim_neg = -50.0f;
    if (s_ident.valid) {
       u_lim_pos = s_ident.u_heat_max;
       u_lim_neg = s_ident.u_cool_max;
    }
 
-   /* 散热器温度衰减 */
+   // 散热器温度衰减
    int hot_idx = s_ident.ds18_hot_idx;
    if (hot_idx >= 0 && hot_idx < 2 && s_ds18_valid[hot_idx]) {
       float t = s_ds18_temp[hot_idx];
@@ -341,19 +388,15 @@ static void tec_pi_control(void)
          float r = (TEC_ATTEN_END_TEMP - t) / (TEC_ATTEN_END_TEMP - TEC_ATTEN_START_TEMP);
          if (r < 0) r = 0;
          if (r > 1) r = 1;
-         /* u_cool_max 是负值，绝对值衰减 */
-         u_lim_neg = u_lim_neg * r;  /* u_lim_neg 本身就是负值，乘正 ratio 靠近 0 */
+         u_lim_neg = u_lim_neg * r;
       }
    }
 
-   /* 比例项 */
+   // PI 计算与抗饱和
    float P = s_ident.Kc * e;
-
-   /* 积分项（带抗饱和） */
    float I = s_ident.Kc * (Ts / s_ident.Ti) * s_pi_integral;
    float u_raw = P + I;
 
-   /* 抗积分饱和：输出达到限制且误差继续驱动饱和 → 冻结积分 */
    bool saturated = false;
    if (u_raw > u_lim_pos && e > 0) saturated = true;
    if (u_raw < u_lim_neg && e < 0) saturated = true;
@@ -362,11 +405,9 @@ static void tec_pi_control(void)
       s_pi_integral += e;
    }
 
-   /* 限幅 */
    if (u_raw > u_lim_pos) u_raw = u_lim_pos;
    if (u_raw < u_lim_neg) u_raw = u_lim_neg;
 
-   /* 输出 */
    float duty = 50.0f + u_raw;
    tec_set_raw_duty(duty);
 
@@ -452,18 +493,15 @@ static void tec_ident_state_machine(void)
    static float s_id_start_temp = 0.0f;
 
    /* 读取传感器 */
-   bool all_ok = tec_read_sensors();
-   if (!all_ok && s_idsub != IDSUB_IDLE) {
-      TEC_LOGW("Sensor fault during identification (SHT30=%d DS0=%d DS1=%d)",
-               s_sht30_valid, s_ds18_valid[0], s_ds18_valid[1]);
-      /* 传感器全部离线 → 终止辨识 */
-      if (!s_sht30_valid && !s_ds18_valid[0] && !s_ds18_valid[1]) {
-         TEC_LOGE("All sensors offline → abort identification");
-         s_idsub = IDSUB_IDLE;
-         s_state = TEC_STATE_SAFE;
-         tec_set_raw_duty(50.0f);
-         return;
-      }
+   tec_read_sensors();
+
+   /* 任一传感器连续离线超过阈值 → 立即终止辨识 */
+   if (s_idsub != IDSUB_IDLE && tec_is_any_sensor_fault()) {
+      TEC_LOGE("Sensor hardware fault → abort identification");
+      s_idsub = IDSUB_IDLE;
+      s_state = TEC_STATE_SAFE;
+      tec_set_raw_duty(50.0f);
+      return;
    }
 
    /* 更新移动平均 */
@@ -946,13 +984,24 @@ static void tec_control_task(void *arg)
       s_state = TEC_STATE_IDLE;
    }
 
-   while (1) {
+      while (1) {
       s_run_seconds++;
 
       /* 读取传感器 */
       tec_read_sensors();
 
-      /* 运行时安全检查（所有状态） */
+      /* 任意传感器硬件故障（连续离线超限）→ 紧急停机 */
+      if (tec_is_any_sensor_fault()) {
+         if (s_state != TEC_STATE_SAFE) {
+            TEC_LOGE("Sensor fault in state %s → emergency stop", tec_controller_get_state_str());
+            s_state = TEC_STATE_SAFE;
+            tec_set_raw_duty(50.0f);
+            s_pi_enabled = false;
+            s_pi_integral = 0.0f;
+         }
+      }
+
+      /* 运行时安全检查（SAFE 状态也继续检查，但不再做 safety_check） */
       if (s_state == TEC_STATE_RUNNING || s_state == TEC_STATE_ID_HEATSINK ||
           s_state == TEC_STATE_ID_SYSTEM) {
          tec_safety_check();
@@ -974,7 +1023,6 @@ static void tec_control_task(void *arg)
          break;
 
       case TEC_STATE_TUNED:
-         /* 等待设定目标温度后进入 RUNNING */
          break;
 
       default:
@@ -1038,6 +1086,10 @@ void tec_controller_start_identification(void)
    memset(&s_ident, 0, sizeof(s_ident));
    s_ident.ds18_cold_idx = -1;
    s_ident.ds18_hot_idx = -1;
+   /* 重置离线计数器 */
+   s_sht30_offline_cnt = 0;
+   s_ds18_offline_cnt[0] = 0;
+   s_ds18_offline_cnt[1] = 0;
    TEC_LOGI("Identification started");
 }
 

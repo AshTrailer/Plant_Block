@@ -11,7 +11,6 @@ idf_component_register(
         irrigation_controller
         moisture_sensor
         cloud_comm
-        hmi_uart
         ds18b20_sensor
         sht30_sensor
         float_switch

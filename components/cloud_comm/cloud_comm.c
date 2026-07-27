@@ -12,8 +12,8 @@
 #include "mqtt_client.h"
 #include "esp_smartconfig.h"
 #include "time.h"
-#include "time_manager.h"        // ← 恢复
-#include "command_processor.h"   // ← 恢复
+#include "time_manager.h"
+#include "command_processor.h"
 #include "event_bus.h"
 #include <string.h>
 #include <stdio.h>
@@ -21,9 +21,10 @@
 static const char *TAG = "CLOUD_COMM";
 
 // 事件组位
-#define WIFI_CONNECTED_BIT BIT0
-#define MQTT_CONNECTED_BIT BIT1
-#define WIFI_RETRY_MAX  3
+#define WIFI_CONNECTED_BIT      BIT0
+#define MQTT_CONNECTED_BIT      BIT1
+#define SMART_CREDENTIALS_BIT   BIT2
+#define WIFI_RETRY_MAX          3
 
 static EventGroupHandle_t s_event_group = NULL;
 
@@ -54,12 +55,24 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
                                int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        ESP_LOGI(TAG, "WiFi started, connecting...");
-        esp_wifi_connect();
+        ESP_LOGI(TAG, "WiFi started");
+        /* 不在这里自动连接，由 wifi_init_sta() 统一管理 */
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGW(TAG, "WiFi disconnected, trying to reconnect...");
+        wifi_event_sta_disconnected_t *disconn = (wifi_event_sta_disconnected_t *)event_data;
+        ESP_LOGW(TAG, "WiFi disconnected, reason=%d", disconn->reason);
+        /* 打印可读原因 */
+        switch (disconn->reason) {
+            case 2:   ESP_LOGW(TAG, "  → AUTH_EXPIRE"); break;
+            case 3:   ESP_LOGW(TAG, "  → AUTH_LEAVE"); break;
+            case 4:   ESP_LOGW(TAG, "  → ASSOC_EXPIRE"); break;
+            case 15:  ESP_LOGW(TAG, "  → 4WAY_HANDSHAKE_TIMEOUT (likely wrong password)"); break;
+            case 201: ESP_LOGW(TAG, "  → NO_AP_FOUND"); break;
+            case 202: ESP_LOGW(TAG, "  → AUTH_FAIL"); break;
+            case 205: ESP_LOGW(TAG, "  → ASSOC_FAIL"); break;
+            default:  break;
+        }
         s_mqtt_connected = false;
-        esp_wifi_connect();
+        /* 不自动重连，由 wifi_init_sta() / smartconfig_task 统一管理 */
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
@@ -72,7 +85,6 @@ static void smartconfig_event_handler(void *arg, esp_event_base_t base,
                                       int32_t event_id, void *event_data)
 {
     if (base != SC_EVENT) return;
-
     switch (event_id) {
         case SC_EVENT_SCAN_DONE:
             ESP_LOGI(TAG, "SmartConfig: Scan done");
@@ -84,7 +96,18 @@ static void smartconfig_event_handler(void *arg, esp_event_base_t base,
             smartconfig_event_got_ssid_pswd_t *evt =
                 (smartconfig_event_got_ssid_pswd_t *)event_data;
             ESP_LOGI(TAG, "SmartConfig: Got SSID=%s", evt->ssid);
-            // 凭据已自动保存到 NVS，WiFi 会自动开始连接
+            /* 显式保存 WiFi 配置（v5.5.1 库不会自动连接，需手动处理） */
+            wifi_config_t wifi_cfg = {0};
+            memcpy(wifi_cfg.sta.ssid, evt->ssid, sizeof(wifi_cfg.sta.ssid));
+            memcpy(wifi_cfg.sta.password, evt->password, sizeof(wifi_cfg.sta.password));
+            wifi_cfg.sta.bssid_set = evt->bssid_set;
+            if (evt->bssid_set) {
+                memcpy(wifi_cfg.sta.bssid, evt->bssid, sizeof(wifi_cfg.sta.bssid));
+            }
+            ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
+            ESP_LOGI(TAG, "SmartConfig: credentials saved to NVS");
+            /* 通知 smartconfig_task：凭据已就绪 */
+            xEventGroupSetBits(s_event_group, SMART_CREDENTIALS_BIT);
             break;
         }
         case SC_EVENT_SEND_ACK_DONE:
@@ -206,30 +229,45 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 // ------------------ SmartConfig 任务（v5.x 事件版）------------------
 static void smartconfig_task(void *arg)
 {
-   ESP_LOGI(TAG, "Starting SmartConfig (ESPTouch), waiting for 120s...");
-
-   // 注册 SmartConfig 事件
-   ESP_ERROR_CHECK(esp_event_handler_instance_register(
-       SC_EVENT, ESP_EVENT_ANY_ID,
-       &smartconfig_event_handler, NULL, NULL));
-
+   ESP_LOGI(TAG, "Starting SmartConfig (ESPTouch)...");
+   esp_event_handler_instance_register(SC_EVENT, ESP_EVENT_ANY_ID,
+                                       &smartconfig_event_handler, NULL, NULL);
    esp_smartconfig_set_type(SC_TYPE_ESPTOUCH);
    smartconfig_start_config_t cfg = SMARTCONFIG_START_CONFIG_DEFAULT();
    ESP_ERROR_CHECK(esp_smartconfig_start(&cfg));
-
-   // 等待 WiFi 连接成功或超时 120s
-   EventBits_t bits = xEventGroupWaitBits(s_event_group, WIFI_CONNECTED_BIT,
-                                          pdFALSE, pdFALSE, pdMS_TO_TICKS(120000));
-   if (bits & WIFI_CONNECTED_BIT) {
-      ESP_LOGI(TAG, "SmartConfig: WiFi connected successfully");
+   /* 第一步：等待收到凭据（60s 超时） */
+   EventBits_t bits = xEventGroupWaitBits(s_event_group, SMART_CREDENTIALS_BIT,
+                                          pdFALSE, pdFALSE, pdMS_TO_TICKS(60000));
+   if (bits & SMART_CREDENTIALS_BIT) {
+      ESP_LOGI(TAG, "SmartConfig credentials received, stopping sniffer...");
+   } else {
+      ESP_LOGW(TAG, "SmartConfig: no credentials received in 60s");
    }
-
+   /* 完全停止 SmartConfig，等待嗅探器硬件彻底关闭 */
    esp_smartconfig_stop();
-
-   // 注销 SmartConfig 事件
+   vTaskDelay(pdMS_TO_TICKS(2000));  // 给 WiFi 硬件足够时间退出嗅探器模式
+   if (bits & SMART_CREDENTIALS_BIT) {
+      /* 现在 WiFi 已回到 STA 模式空闲状态，安全发起连接 */
+      ESP_LOGI(TAG, "Connecting to AP with new credentials...");
+      /* 清空旧的连接标志 */
+      xEventGroupClearBits(s_event_group, WIFI_CONNECTED_BIT);
+      esp_err_t err = esp_wifi_disconnect();
+      ESP_LOGI(TAG, "esp_wifi_disconnect() = %s", esp_err_to_name(err));
+      vTaskDelay(pdMS_TO_TICKS(500));
+      err = esp_wifi_connect();
+      ESP_LOGI(TAG, "esp_wifi_connect() = %s", esp_err_to_name(err));
+      /* 等待获取 IP（最长 30s） */
+      bits = xEventGroupWaitBits(s_event_group, WIFI_CONNECTED_BIT,
+                                 pdFALSE, pdFALSE, pdMS_TO_TICKS(30000));
+      if (bits & WIFI_CONNECTED_BIT) {
+         ESP_LOGI(TAG, "SmartConfig: WiFi connected successfully");
+      } else {
+         ESP_LOGW(TAG, "SmartConfig: WiFi connection timed out after credentials");
+         /* 可以在这里加入重试逻辑 */
+      }
+   }
    esp_event_handler_instance_unregister(SC_EVENT, ESP_EVENT_ANY_ID,
                                          &smartconfig_event_handler);
-
    ESP_LOGI(TAG, "SmartConfig task exiting");
    vTaskDelete(NULL);
 }
@@ -243,7 +281,15 @@ static bool wifi_connect_stored(void)
       return false;
    }
    ESP_LOGI(TAG, "Trying stored SSID: %s", wifi_cfg.sta.ssid);
-   esp_wifi_connect();
+   /* 清空上次残留的连接标志 */
+   xEventGroupClearBits(s_event_group, WIFI_CONNECTED_BIT);
+   esp_err_t connect_err = esp_wifi_connect();
+   if (connect_err != ESP_OK) {
+      /* ESP_ERR_WIFI_CONN (0x300b) = 已在连接中，不算错误，继续等待 */
+      if (connect_err != ESP_ERR_WIFI_CONN) {
+         ESP_LOGW(TAG, "esp_wifi_connect() failed: %s (0x%x)", esp_err_to_name(connect_err), connect_err);
+      }
+   }
    EventBits_t bits = xEventGroupWaitBits(s_event_group, WIFI_CONNECTED_BIT,
                                           pdFALSE, pdFALSE, pdMS_TO_TICKS(15000));
    return (bits & WIFI_CONNECTED_BIT) != 0;
@@ -261,22 +307,26 @@ static void wifi_init_sta(void)
    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
    ESP_ERROR_CHECK(esp_wifi_start());
 
-   int retry = 0;
-   while (retry < WIFI_RETRY_MAX) {
+   /* ---- 手动重试循环（最多 3 次）---- */
+   for (int attempt = 0; attempt < WIFI_RETRY_MAX; attempt++) {
+      ESP_LOGI(TAG, "WiFi attempt %d/%d", attempt + 1, WIFI_RETRY_MAX);
+
       if (wifi_connect_stored()) {
          ESP_LOGI(TAG, "WiFi connected using stored credentials");
          esp_wifi_set_ps(WIFI_PS_NONE);
          return;
       }
-      retry++;
-      ESP_LOGW(TAG, "WiFi attempt %d failed, retrying...", retry);
+
+      ESP_LOGW(TAG, "Attempt %d failed, disconnecting for clean retry...", attempt + 1);
+      esp_wifi_disconnect();
+      vTaskDelay(pdMS_TO_TICKS(2000));  /* 等待断开完成 */
    }
 
-   // 全部失败 → 启动 SmartConfig
+   /* ---- 全部失败 → 启动 SmartConfig ---- */
    ESP_LOGI(TAG, "Stored credentials failed, starting SmartConfig...");
    xTaskCreate(smartconfig_task, "smartconfig", 4096, NULL, 3, NULL);
 
-   // 等待 SmartConfig 完成（最长 120s）
+   /* 等待 SmartConfig 完成（最长 120s） */
    EventBits_t bits = xEventGroupWaitBits(s_event_group, WIFI_CONNECTED_BIT,
                                           pdFALSE, pdFALSE, pdMS_TO_TICKS(120000));
    if (bits & WIFI_CONNECTED_BIT) {

@@ -73,7 +73,7 @@ static void sht30_worker_task(void *arg)
       xSemaphoreGive(s_data_mutex);
 
       if (err == ESP_OK) {
-         SHT30_LOGI("Temperature: %.2f °C, Humidity: %.2f %%RH", temp, hum);
+         //SHT30_LOGI("Temperature: %.2f °C, Humidity: %.2f %%RH", temp, hum);
          if (s_callback) {
             s_callback(temp, hum, s_user_ctx);
          }

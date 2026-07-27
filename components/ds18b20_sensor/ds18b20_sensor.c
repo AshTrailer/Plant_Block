@@ -17,7 +17,7 @@ static const char *TAG = "DS18B20_SENSOR";
 #define DS18B20_LOGW(fmt, ...) ESP_LOGW(TAG, fmt, ##__VA_ARGS__)
 
 /* ---------- 配置 ---------- */
-#define DS18B20_MAX_DEVICES      4
+#define DS18B20_MAX_DEVICES      2
 #define DS18B20_CONV_DELAY_MS    380   // 11-bit: 375ms + 5ms 余量
 
 /* ---------- 设备角色 ---------- */
@@ -119,7 +119,7 @@ static void read_all_and_notify(ds18b20_temp_cb_t callback, void *user_ctx)
       }
 
       if (ok) {
-         DS18B20_LOGI("DS18B20[%d]: %.2f °C", i, temp);
+         //DS18B20_LOGI("DS18B20[%d]: %.2f °C", i, temp);
          if (callback) {
             callback(i, temp, user_ctx);
          }

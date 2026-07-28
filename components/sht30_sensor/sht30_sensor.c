@@ -139,7 +139,7 @@ void sht30_sensor_init(int sda_pin, int scl_pin)
       "sht30_worker",
       3072,
       NULL,
-      3,
+      4,
       &s_worker_task
    );
 

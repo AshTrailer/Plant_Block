@@ -68,7 +68,7 @@ void ventilation_control_start(void) {
                 "ventilation_task",      // 任务名称
                 4096,                    // 堆栈大小
                 NULL,                    // 任务参数
-                2,                       // 任务优先级
+                1,                       // 任务优先级
                 &s_ventilation_task_handle); // 任务句柄
     
     if (s_ventilation_task_handle != NULL) {

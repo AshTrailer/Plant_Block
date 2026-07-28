@@ -1,44 +1,21 @@
 dependencies:
   espressif/cmake_utilities:
-    component_hash: 351350613ceafba240b761b4ea991e0f231ac7a9f59a9ee901f751bddc0bb18f
-    dependencies:
-    - name: idf
-      require: private
-      version: '>=4.1'
+    dependencies: []
     source:
-      registry_url: https://components.espressif.com
-      type: service
+      path: /home/ashtrailer/Program/Embed_System/Plant_Project/esp-idf/managed_components/espressif__cmake_utilities
+      type: local
     version: 0.5.3
   espressif/ds18b20:
-    component_hash: 38022d0c39c08b1df3e77f95a3f9544251549a1fd9b6263357bf714026f4bb6b
-    dependencies:
-    - name: espressif/onewire_bus
-      registry_url: https://components.espressif.com
-      require: private
-      version: ^1.1.0
-    - matches:
-      - if: $CONFIG{DS18B20_SENSOR_HUB} == True
-      name: espressif/sensor_hub
-      registry_url: https://components.espressif.com
-      require: public
-      version: ^0.1.4
+    dependencies: []
     source:
-      registry_url: https://components.espressif.com/
-      type: service
+      path: /home/ashtrailer/Program/Embed_System/Plant_Project/esp-idf/managed_components/espressif__ds18b20
+      type: local
     version: 0.4.0
   espressif/i2c_bus:
-    component_hash: 483112c1619c54c38d0b734fb25f1678733267858a77b7af2f48cc7db6dbbd84
-    dependencies:
-    - name: espressif/cmake_utilities
-      registry_url: https://components.espressif.com
-      require: private
-      version: '*'
-    - name: idf
-      require: private
-      version: '>=4.0'
+    dependencies: []
     source:
-      registry_url: https://components.espressif.com
-      type: service
+      path: /home/ashtrailer/Program/Embed_System/Plant_Project/esp-idf/managed_components/espressif__i2c_bus
+      type: local
     version: 1.5.2
   espressif/onewire_bus:
     component_hash: a85dc1ceb71fb87af77c57d5fd4e6f48a504de1fc2b83fc302ec0cea331d05ce
@@ -51,54 +28,29 @@ dependencies:
       type: service
     version: 1.1.1
   espressif/sensor_hub:
-    component_hash: ea30db551c34aee2862482abf8b3164dd3855ecb4b4659b1e6878455c9cb9e22
-    dependencies:
-    - name: espressif/cmake_utilities
-      registry_url: https://components.espressif.com
-      require: private
-      version: 0.*
-    - name: espressif/i2c_bus
-      registry_url: https://components.espressif.com
-      require: public
-      version: 1.*
-    - name: idf
-      require: private
-      version: '>=4.4'
+    dependencies: []
     source:
-      registry_url: https://components.espressif.com
-      type: service
+      path: /home/ashtrailer/Program/Embed_System/Plant_Project/esp-idf/managed_components/espressif__sensor_hub
+      type: local
     version: 0.1.5
   espressif/sht3x:
-    component_hash: c9bcb43e9d771dbd65e5855b12424d0a386b07d9aba98b2ed57890985013f4e5
-    dependencies:
-    - name: espressif/cmake_utilities
-      registry_url: https://components.espressif.com
-      require: private
-      version: 0.*
-    - name: espressif/i2c_bus
-      registry_url: https://components.espressif.com
-      require: public
-      version: '*'
-    - name: idf
-      require: private
-      version: '>=4.4'
-    - name: espressif/sensor_hub
-      registry_url: https://components.espressif.com
-      require: public
-      version: '*'
+    dependencies: []
     source:
-      registry_url: https://components.espressif.com/
-      type: service
+      path: /home/ashtrailer/Program/Embed_System/Plant_Project/esp-idf/managed_components/espressif__sht3x
+      type: local
     version: 0.2.0
   idf:
     source:
       type: idf
     version: 5.5.1
 direct_dependencies:
+- espressif/cmake_utilities
 - espressif/ds18b20
+- espressif/i2c_bus
 - espressif/onewire_bus
+- espressif/sensor_hub
 - espressif/sht3x
 - idf
-manifest_hash: 036e6c5014ba861c3e2996b444ff28b2ddb69d9b50ca91504e0789817d64b849
+manifest_hash: b87d8b0f47300fa20cd219afc3e52bf02bf7a4c9a31b83e97e11883d576bcef3
 target: esp32
 version: 2.0.0

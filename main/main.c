@@ -18,9 +18,10 @@
 #include "sht30_sensor.h"
 #include "float_switch.h"
 #include "fan_control.h"
+#include "system_monitor.h"
+#include "esp_task_wdt.h"
 #include "vofa_output.h"
 #include "event_bus.h"
-#include "system_monitor.h"
 
 static const char *TAG = "MAIN";
 
@@ -30,6 +31,7 @@ static TaskHandle_t s_vofa_task_handle = NULL;
 static void vofa_sensor_task(void *arg)
 {
    (void)arg;
+   esp_task_wdt_add(NULL);
    vTaskDelay(pdMS_TO_TICKS(3000));
    ESP_LOGI(TAG, "Vofa sensor task started");
    while (1) {
@@ -53,6 +55,7 @@ static void vofa_sensor_task(void *arg)
                                     has_water, ntc_overtemp,
                                     light_duty, light_on,
                                     pump_speed, pump_on);
+      esp_task_wdt_reset();                              
       vTaskDelay(pdMS_TO_TICKS(1000));
    }
 }

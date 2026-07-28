@@ -1,10 +1,10 @@
 #include "system_monitor.h"
 #include "event_bus.h"
 #include "esp_log.h"
-#include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "esp_task_wdt.h"
 #include <string.h>
 
 static const char *TAG = "SYS_MON";
@@ -27,6 +27,7 @@ static TaskHandle_t s_monitor_task_handle = NULL;
 // ---------- 监控任务 ----------
 static void monitor_task(void *arg)
 {
+   esp_task_wdt_add(NULL);
    ESP_LOGI(TAG, "System monitor started (interval=%lu ms, stack_threshold=%lu words)",
             (unsigned long)s_interval_ms, (unsigned long)s_stack_threshold);
 
@@ -68,30 +69,39 @@ static void monitor_task(void *arg)
                   (unsigned long)free_heap, (unsigned long)s_min_free_heap,
                   s_task_count, stack_alert ? " [STACK ALERT!]" : "");
       }
+      esp_task_wdt_reset();
    }
 }
 
 // ---------- 初始化 ----------
+// ============ system_monitor_init 替换 ============
 void system_monitor_init(uint32_t interval_ms, uint32_t stack_low_water_threshold)
 {
    s_interval_ms = interval_ms;
    s_stack_threshold = stack_low_water_threshold;
    s_mutex = xSemaphoreCreateMutex();
 
-   // 启动硬件看门狗
+   /* ESP-IDF v5.x 在早期启动时已自动初始化 TWDT（超时 5s，监控双核 IDLE）。
+      先销毁默认配置，再用我们的参数重建。 */
+   esp_task_wdt_deinit();   // 忽略返回值
+
    esp_task_wdt_config_t twdt_cfg = {
-      .timeout_ms = 30000,    // 30 秒超时
-      .idle_core_mask = 0,     // 不监控 IDLE 任务
+      .timeout_ms = 30000,
+      .idle_core_mask = (1 << 0) | (1 << 1),  // 监控 Core 0 和 Core 1 的 IDLE 任务（最后防线）
       .trigger_panic = true,
    };
-   esp_task_wdt_init(&twdt_cfg);
-   esp_task_wdt_add(NULL);     // 注册当前任务（main）
+   ESP_ERROR_CHECK(esp_task_wdt_init(&twdt_cfg));
 
-   // 启动监控任务
+   /* 将当前任务（main）订阅到 TWDT，main 循环中须定期 system_monitor_feed_watchdog() */
+   esp_task_wdt_add(NULL);
+   ESP_LOGI(TAG, "TWDT reconfigured: timeout=%lu ms, idle_core_mask=0x%x",
+            (unsigned long)twdt_cfg.timeout_ms, twdt_cfg.idle_core_mask);
+
+   /* 启动监控任务 */
    xTaskCreate(monitor_task, "sys_monitor", 3072, NULL,
                tskIDLE_PRIORITY + 2, &s_monitor_task_handle);
 
-   // 注册自身
+   /* 注册自身并添加到 TWDT */
    system_monitor_register_task("sys_monitor", s_monitor_task_handle);
 
    ESP_LOGI(TAG, "System monitor initialized");

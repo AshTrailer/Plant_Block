@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 #include "freertos/timers.h"
 #include "freertos/semphr.h"
+#include "esp_task_wdt.h"
 #include "driver/mcpwm.h"
 #include "driver/gpio.h"
 #include "nvs_flash.h"
@@ -12,7 +13,6 @@
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
-
 #include "pin_definitions.h"
 #include "fan_control.h"
 #include "sht30_sensor.h"
@@ -973,6 +973,7 @@ bool tec_controller_load_ident_from_nvs(void)
  * ================================================================ */
 static void tec_control_task(void *arg)
 {
+   esp_task_wdt_add(NULL);
    TEC_LOGI("Control task started");
 
    /* 等待传感器就绪 */
@@ -1028,7 +1029,7 @@ static void tec_control_task(void *arg)
       default:
          break;
       }
-
+      esp_task_wdt_reset();
       vTaskDelay(pdMS_TO_TICKS(TEC_TASK_INTERVAL_MS));
    }
 }

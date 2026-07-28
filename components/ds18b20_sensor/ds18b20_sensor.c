@@ -22,7 +22,7 @@ static const char *TAG = "DS18B20_SENSOR";
 
 /* ---------- 设备角色 ---------- */
 static char s_device_roles[DS18B20_MAX_DEVICES][8] = {
-   "cold", "hot", "", ""
+   "cold", "hot"
 };
 
 /* ---------- 静态状态 ---------- */
@@ -284,7 +284,7 @@ void ds18b20_sensor_init(int gpio_num, int max_devices)
       "ds18b20_worker",
       4096,
       NULL,
-      3,
+      4,
       &s_worker_task
    );
 

@@ -470,7 +470,6 @@ bool moisture_sensor_read_stable(float *humidity_percent)
    for (int i = 0; i < STABLE_SAMPLE_COUNT; i++) {
       uint32_t volt_efuse = adc_read_voltage_efuse();
       uint32_t volt_cal = apply_secondary_calibration(volt_efuse);
-      float hum = calculate_humidity_percent(volt_cal);
       raw_samples[i] = (int)volt_cal;  // 存校准后电压用于去极值
       vTaskDelay(pdMS_TO_TICKS(1000));
    }

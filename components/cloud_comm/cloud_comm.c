@@ -15,6 +15,7 @@
 #include "time_manager.h"
 #include "command_processor.h"
 #include "event_bus.h"
+#include "vofa_output.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -184,11 +185,13 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
 
             xEventGroupSetBits(s_event_group, MQTT_CONNECTED_BIT);
             event_bus_subscribe(EVENT_ALARM, cloud_on_alarm_event, NULL);
+            vofa_output_set_cloud_enabled(true);
             break;
 
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGW(TAG, "MQTT disconnected");
             s_mqtt_connected = false;
+            vofa_output_set_cloud_enabled(false);
             break;
 
         case MQTT_EVENT_DATA:

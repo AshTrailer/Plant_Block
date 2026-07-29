@@ -67,12 +67,13 @@ void input_parser_poll(void) {
         memset(s_input_buffer, 0, INPUT_BUFFER_SIZE);
         s_buffer_index = 0;
         s_in_parsing = true;
-        INPUT_LOGI("Start receiving new frame...");
+        //INPUT_LOGI("Start receiving new frame...");
+        ESP_LOGI(TAG, "Start receiving new frame...");
     }
 
     // 边界检查
     if (s_buffer_index >= INPUT_BUFFER_SIZE - 1) {
-        INPUT_LOGI("Error: Buffer overflow!");
+        INPUT_LOGE("Error: Buffer overflow!");
         s_in_parsing = false;
         s_buffer_index = 0;
         return;

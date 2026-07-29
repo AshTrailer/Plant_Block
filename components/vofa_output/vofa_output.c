@@ -3,10 +3,12 @@
 #include "esp_log.h"
 #include <stdio.h>
 #include <stdarg.h>
+#include "cloud_comm.h"
 
 static const char *TAG = "VOFA_OUTPUT";
 
 static int s_uart_num = UART_NUM_0;
+static bool s_cloud_enabled = false;
 
 // ---------- 初始化 ----------
 void vofa_output_init(int uart_num, int baud_rate)
@@ -61,6 +63,15 @@ void vofa_output_send(const char *prefix, const char *fmt, ...)
 
    // 通过 UART 发送
    uart_write_bytes(s_uart_num, buf, strlen(buf));
+   // ---- 新增：云端镜像 ----
+   if (s_cloud_enabled) {
+      /* 去掉末尾换行符再发布（MQTT 消息不需要换行） */
+      int cloud_len = (int)strlen(buf);
+      if (cloud_len > 0 && buf[cloud_len - 1] == '\n') {
+         buf[cloud_len - 1] = '\0';
+      }
+      cloud_comm_publish("msg", buf);//cloud_comm_publish("data", buf);
+   }
 }
 
 // ---------- 便捷传感器数据帧 ----------
@@ -110,4 +121,11 @@ void vofa_output_subscribe_all(void)
    event_bus_subscribe(EVENT_ALARM, event_to_vofa, NULL);
    event_bus_subscribe(EVENT_SYSTEM_HEALTH, event_to_vofa, NULL);
    ESP_LOGI(TAG, "Subscribed to event bus for Vofa+ output");
+}
+
+// ---------- 云端镜像开关 ----------
+void vofa_output_set_cloud_enabled(bool enabled)
+{
+   s_cloud_enabled = enabled;
+   ESP_LOGI(TAG, "Cloud mirror %s", enabled ? "ENABLED" : "DISABLED");
 }

@@ -12,6 +12,7 @@
 #include "float_switch.h"
 #include "tec_controller.h"
 #include "event_bus.h"
+#include "cloud_comm.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -41,6 +42,7 @@ static void cmd_log(const char *fmt, ...)
    vsnprintf(buf, sizeof(buf), fmt, args);
    va_end(args);
    ESP_LOGI(TAG, "%s", buf);
+   cloud_comm_publish("msg", buf);
 }
 
 // ==================== 帮助命令 ====================

@@ -28,4 +28,10 @@ void vofa_output_send_sensor_frame(float sht30_temp, float sht30_hum,
 // 注册后自动监听事件并输出到 Vofa+
 void vofa_output_subscribe_all(void);
 
+/**
+ * @brief 开启/关闭云端镜像（MQTT 连接后调用）
+ * @param enabled true=同时发往云端, false=仅本地 UART
+ */
+void vofa_output_set_cloud_enabled(bool enabled);
+
 #endif // VOFA_OUTPUT_H

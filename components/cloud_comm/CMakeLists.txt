@@ -12,4 +12,5 @@ idf_component_register(
         tls_config
         time_manager
         command_processor
+        vofa_output
 )

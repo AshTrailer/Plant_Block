@@ -4,4 +4,5 @@ idf_component_register(
     REQUIRES 
         event_bus
         driver
+        cloud_comm
 )

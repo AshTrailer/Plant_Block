@@ -20,6 +20,7 @@
 #include "ventilation_control.h"
 #include "event_bus.h"
 #include "data_processor.h"
+#include "vofa_output.h"
 
 /* ================================================================
  *  配置宏
@@ -41,6 +42,10 @@
 #define TEC_TEMP_RATE_THRESHOLD   0.0083f /* 0.5°C/min ≈ 0.0083°C/s */
 #define TEC_MA_FILTER_LEN         10      /* 移动平均窗口 */
 #define TEC_SENSOR_OFFLINE_THRESHOLD  5    /* 连续 5 秒无有效数据 → 视为硬件故障 */
+#define TEC_NVS_NAMESPACE  "tec_ctrl"
+#define TEC_NVS_KEY        "ident"
+#define TEC_IDENT_MIN_STEP_DWELL_SEC  60    /* 每步最少等待 60 秒（给热传递留时间） */
+#define TEC_IDENT_MIN_DT              0.2f  /* 温度响应阈值：至少变化 0.2°C 才认为系统有响应 */
 
 #define TAG "TEC_CTRL"
 
@@ -99,6 +104,7 @@ static int s_ds18_offline_cnt[2] = {0, 0};
 
 /* 传感器缓存（由控制任务每秒更新） */
 static float s_sht30_temp = 0.0f;
+static float s_id_step_start_temp[2] = {0.0f, 0.0f};  /* 当前步起始时两个 DS18B20 的温度 */
 static float s_ds18_temp[2] = {0.0f, 0.0f};
 static bool  s_sht30_valid = false;
 static bool  s_ds18_valid[2] = {false, false};
@@ -157,7 +163,7 @@ static bool tec_read_sensors(void);
 static bool tec_check_steady_state(float current_temp, float *history,
                                    int len, float *out_stddev_pct);
 static bool tec_check_temp_stable_rate(const ma_filter_t *f, float threshold_c_per_s);
-static void tec_fit_fopdt_and_tune(void);
+static bool tec_fit_fopdt_and_tune(void);
 static void tec_save_ident_to_nvs(void);
 
 /* ================================================================
@@ -411,26 +417,33 @@ static void tec_pi_control(void)
    float duty = 50.0f + u_raw;
    tec_set_raw_duty(duty);
 
-   TEC_LOGI("PI: T=%.2f target=%.2f e=%.2f u=%.1f%% duty=%.1f%% int=%.2f%s",
-            s_sht30_temp, s_target_temp, e, u_raw, duty, s_pi_integral,
-            saturated ? " [SAT]" : "");
+   //TEC_LOGI("PI: T=%.2f target=%.2f e=%.2f u=%.1f%% duty=%.1f%% int=%.2f%s",
+   //         s_sht30_temp, s_target_temp, e, u_raw, duty, s_pi_integral,
+   //         saturated ? " [SAT]" : "");
+   vofa_output_send("tec", "pi,T=%.2f,target=%.2f,e=%.2f,u=%.1f,duty=%.1f,int=%.2f%s",
+                    s_sht30_temp, s_target_temp, e, u_raw, duty, s_pi_integral,
+                    saturated ? ",SAT" : "");
 }
 
 /* ================================================================
  *  FOPDT 拟合 & Lambda PI 整定
  * ================================================================ */
-static void tec_fit_fopdt_and_tune(void)
+/* ================================================================
+ *  FOPDT 拟合 & Lambda PI 整定
+ *  返回 true 表示拟合成功，false 表示数据不足以拟合
+ * ================================================================ */
+static bool tec_fit_fopdt_and_tune(void)
 {
    if (s_id_record_len < 30) {
       TEC_LOGE("Too few samples for FOPDT fit (%d)", s_id_record_len);
-      return;
+      return false;         // ← 改为 return false
    }
 
    /* 找到温度开始明显变化的时刻（变化 > 5% 总变化量） */
    float dT_total = s_id_temp[s_id_record_len - 1] - s_id_T_start;
    if (fabsf(dT_total) < 0.1f) {
       TEC_LOGE("Temperature change too small (%.2f °C)", dT_total);
-      return;
+      return false;         // ← 改为 return false
    }
 
    float threshold = fabsf(dT_total) * 0.05f;
@@ -479,6 +492,7 @@ static void tec_fit_fopdt_and_tune(void)
 
    TEC_LOGI("FOPDT: K=%.4f tau=%.1fs theta=%.1fs", K, tau, theta);
    TEC_LOGI("Lambda: λ=%.1fs → Kc=%.4f Ti=%.1fs", lambda, Kc, Ti);
+   return true;             // ← 新增
 }
 
 /* ================================================================
@@ -543,7 +557,7 @@ static void tec_ident_state_machine(void)
       break;
    }
 
-   /* ================================================================
+      /* ================================================================
     *  H2：粗标正向（5% 步长）
     * ================================================================ */
    case IDSUB_H2_COARSE_FWD: {
@@ -560,20 +574,40 @@ static void tec_ident_state_machine(void)
          }
       }
 
-      /* 检查温度变化率是否已稳定或超时 */
       uint32_t elapsed = s_run_seconds - s_sub_wait_start;
-      bool rate_stable = true;
+
+      /* ---- ① 最小驻留时间：必须等够才允许判断（给系统热响应留时间）---- */
+      if (elapsed < TEC_IDENT_MIN_STEP_DWELL_SEC) {
+         break;
+      }
+
+      /* ---- ② 检查温度响应：至少一个 DS18B20 变化超过 TEC_IDENT_MIN_DT ---- */
+      bool has_response = false;
       for (int i = 0; i < 2; i++) {
          if (s_ds18_valid[i] && ma_ready(&s_ma_ds18[i])) {
-            if (!tec_check_temp_stable_rate(&s_ma_ds18[i], TEC_TEMP_RATE_THRESHOLD)) {
-               rate_stable = false;
+            float dt = fabsf(ma_value(&s_ma_ds18[i]) - s_id_step_start_temp[i]);
+            if (dt > TEC_IDENT_MIN_DT) {
+               has_response = true;
+            }
+         }
+      }
+
+      /* ---- ③ 仅当有响应时才检查变化率是否稳定 ---- */
+      bool rate_stable = false;
+      if (has_response) {
+         rate_stable = true;  /* 先假设稳定，任一不满足则推翻 */
+         for (int i = 0; i < 2; i++) {
+            if (s_ds18_valid[i] && ma_ready(&s_ma_ds18[i])) {
+               if (!tec_check_temp_stable_rate(&s_ma_ds18[i], TEC_TEMP_RATE_THRESHOLD)) {
+                  rate_stable = false;
+               }
             }
          }
       }
 
       bool timeout = (elapsed > 300);  /* 5 分钟超时 */
 
-      if (rate_stable || timeout) {
+      if ((has_response && rate_stable) || timeout) {
          if (s_id_coarse_u >= 50.0f) {
             /* 已到 100% 占空比仍未超温 */
             s_id_recorded_u = 50.0f;
@@ -586,6 +620,9 @@ static void tec_ident_state_machine(void)
          if (s_id_coarse_u > 50.0f) s_id_coarse_u = 50.0f;
          tec_set_raw_duty(50.0f + s_id_coarse_u);
          s_sub_wait_start = s_run_seconds;
+         /* 记录步进前的温度（用于后续温度响应判断） */
+         s_id_step_start_temp[0] = ma_value(&s_ma_ds18[0]);
+         s_id_step_start_temp[1] = ma_value(&s_ma_ds18[1]);
          /* 重置 MA 滤波器以重新跟踪新阶段的温度变化率 */
          ma_init(&s_ma_ds18[0]);
          ma_init(&s_ma_ds18[1]);
@@ -690,7 +727,7 @@ static void tec_ident_state_machine(void)
       break;
    }
 
-   /* ================================================================
+      /* ================================================================
     *  H6：粗标反向（-5% 步长）
     * ================================================================ */
    case IDSUB_H6_COARSE_REV: {
@@ -707,24 +744,46 @@ static void tec_ident_state_machine(void)
       }
 
       uint32_t elapsed = s_run_seconds - s_sub_wait_start;
-      bool rate_stable = true;
+
+      /* ---- ① 最小驻留时间 ---- */
+      if (elapsed < TEC_IDENT_MIN_STEP_DWELL_SEC) {
+         break;
+      }
+
+      /* ---- ② 检查温度响应 ---- */
+      bool has_response = false;
       for (int i = 0; i < 2; i++) {
          if (s_ds18_valid[i] && ma_ready(&s_ma_ds18[i])) {
-            if (!tec_check_temp_stable_rate(&s_ma_ds18[i], TEC_TEMP_RATE_THRESHOLD)) {
-               rate_stable = false;
+            float dt = fabsf(ma_value(&s_ma_ds18[i]) - s_id_step_start_temp[i]);
+            if (dt > TEC_IDENT_MIN_DT) {
+               has_response = true;
             }
          }
       }
+
+      /* ---- ③ 仅当有响应时才检查变化率 ---- */
+      bool rate_stable = false;
+      if (has_response) {
+         rate_stable = true;
+         for (int i = 0; i < 2; i++) {
+            if (s_ds18_valid[i] && ma_ready(&s_ma_ds18[i])) {
+               if (!tec_check_temp_stable_rate(&s_ma_ds18[i], TEC_TEMP_RATE_THRESHOLD)) {
+                  rate_stable = false;
+               }
+            }
+         }
+      }
+
       bool timeout = (elapsed > 300);
 
-      if (rate_stable || timeout) {
+      if ((has_response && rate_stable) || timeout) {
          if (s_id_coarse_u <= -50.0f) {
             s_id_recorded_u = -50.0f;
             TEC_LOGI("H6: min duty reached (u=-50%%) without over-temp");
             /* 完成阶段 1，进入阶段 2 */
             tec_set_raw_duty(50.0f);
             s_ident.u_cool_max = s_id_recorded_u;
-            s_ident.u_heat_max = s_ident.u_heat_max;  /* 已在 H4 记录 */
+            s_ident.u_heat_max = s_ident.u_heat_max;
             fan_control_on(FAN_VENTILATION);
             s_sub_wait_start = s_run_seconds;
             s_temp_hist_len = 0;
@@ -735,6 +794,9 @@ static void tec_ident_state_machine(void)
          if (s_id_coarse_u < -50.0f) s_id_coarse_u = -50.0f;
          tec_set_raw_duty(50.0f + s_id_coarse_u);
          s_sub_wait_start = s_run_seconds;
+         /* 记录步进前温度 */
+         s_id_step_start_temp[0] = ma_value(&s_ma_ds18[0]);
+         s_id_step_start_temp[1] = ma_value(&s_ma_ds18[1]);
          ma_init(&s_ma_ds18[0]);
          ma_init(&s_ma_ds18[1]);
          TEC_LOGI("H6: step to u=%.1f%% (duty=%.1f%%)", s_id_coarse_u, 50.0f + s_id_coarse_u);
@@ -847,7 +909,6 @@ static void tec_ident_state_machine(void)
       if (stable || elapsed > TEC_STEADY_MAX_WAIT_SEC) {
          s_ident.T_min = ma_value(&s_ma_sht30);
          TEC_LOGI("S2: T_min = %.2f °C (samples=%d)", s_ident.T_min, s_id_record_len);
-         s_ident.K = 0; /* 先用正向数据拟合，这里先记录 */
 
          /* 回温 */
          tec_set_raw_duty(50.0f);
@@ -887,7 +948,7 @@ static void tec_ident_state_machine(void)
       break;
    }
 
-   /* ================================================================
+      /* ================================================================
     *  S4：阶跃制热，记录温度时间序列
     * ================================================================ */
    case IDSUB_S4_STEP_HEAT: {
@@ -909,16 +970,36 @@ static void tec_ident_state_machine(void)
          TEC_LOGI("S4: T_max = %.2f °C (samples=%d)", s_ident.T_max, s_id_record_len);
 
          /* 拟合 FOPDT 并整定 PI */
-         tec_fit_fopdt_and_tune();
+         if (tec_fit_fopdt_and_tune()) {
+            /* ---- 拟合成功 ---- */
+            s_ident.valid = true;
+            tec_set_raw_duty(50.0f);
+            fan_control_off(FAN_VENTILATION);
+            tec_save_ident_to_nvs();
 
-         s_ident.valid = true;
-         tec_set_raw_duty(50.0f);
-         fan_control_off(FAN_VENTILATION);
-         tec_save_ident_to_nvs();
+            s_idsub = IDSUB_DONE;
+            s_state = TEC_STATE_TUNED;
+            TEC_LOGI("Identification complete! Range: [%.1f, %.1f] °C",
+                     s_ident.T_min, s_ident.T_max);
+         } else {
+            /* ---- 拟合失败：擦除可能残留的旧辨识记录，回到 IDLE ---- */
+            s_ident.valid = false;
+            tec_set_raw_duty(50.0f);
+            fan_control_off(FAN_VENTILATION);
 
-         s_idsub = IDSUB_DONE;
-         s_state = TEC_STATE_TUNED;
-         TEC_LOGI("Identification complete! Range: [%.1f, %.1f] °C", s_ident.T_min, s_ident.T_max);
+            /* 擦除 NVS 中的旧记录 */
+            nvs_handle_t handle;
+            if (nvs_open(TEC_NVS_NAMESPACE, NVS_READWRITE, &handle) == ESP_OK) {
+               nvs_erase_key(handle, TEC_NVS_KEY);
+               nvs_commit(handle);
+               nvs_close(handle);
+               TEC_LOGI("Old identification erased from NVS");
+            }
+
+            s_idsub = IDSUB_IDLE;
+            s_state = TEC_STATE_IDLE;
+            TEC_LOGE("Identification failed: FOPDT fit error, reverting to IDLE");
+         }
       }
       break;
    }
@@ -933,14 +1014,12 @@ static void tec_ident_state_machine(void)
 /* ================================================================
  *  NVS 存取辨识结果
  * ================================================================ */
-static const char *NVS_NAMESPACE = "tec_ctrl";
-static const char *NVS_KEY = "ident";
 
 static void tec_save_ident_to_nvs(void)
 {
    nvs_handle_t handle;
-   if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) return;
-   nvs_set_blob(handle, NVS_KEY, &s_ident, sizeof(s_ident));
+   if (nvs_open(TEC_NVS_NAMESPACE, NVS_READWRITE, &handle) != ESP_OK) return;
+   nvs_set_blob(handle, TEC_NVS_KEY, &s_ident, sizeof(s_ident));
    nvs_commit(handle);
    nvs_close(handle);
    TEC_LOGI("Identification result saved to NVS");
@@ -949,11 +1028,10 @@ static void tec_save_ident_to_nvs(void)
 bool tec_controller_load_ident_from_nvs(void)
 {
    nvs_handle_t handle;
-   if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return false;
-
+   if (nvs_open(TEC_NVS_NAMESPACE, NVS_READONLY, &handle) != ESP_OK) return false;
    tec_ident_result_t buf;
    size_t len = sizeof(buf);
-   esp_err_t err = nvs_get_blob(handle, NVS_KEY, &buf, &len);
+   esp_err_t err = nvs_get_blob(handle, TEC_NVS_KEY, &buf, &len);
    nvs_close(handle);
 
    if (err == ESP_OK && len == sizeof(buf) && buf.valid) {
@@ -1091,6 +1169,8 @@ void tec_controller_start_identification(void)
    s_sht30_offline_cnt = 0;
    s_ds18_offline_cnt[0] = 0;
    s_ds18_offline_cnt[1] = 0;
+   s_id_step_start_temp[0] = 0.0f;
+   s_id_step_start_temp[1] = 0.0f;
    TEC_LOGI("Identification started");
 }
 

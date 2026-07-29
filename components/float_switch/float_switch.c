@@ -19,7 +19,7 @@ static uint32_t   s_interval_ms = 500;
 __attribute__((weak))
 void float_switch_on_state_changed(bool state)
 {
-   ESP_LOGI(TAG, "Float switch: %s", state ? "有水" : "缺水");
+   //ESP_LOGI(TAG, "Float switch: %s", state ? "有水" : "缺水");
    // 通过事件总线发布，irrigation_controller 可订阅
    event_bus_publish(EVENT_SENSOR_FLOAT_SW, &state, sizeof(state));
 }
@@ -65,8 +65,9 @@ bool float_switch_get_state(void)
    if (!s_initialized) {
       return false;
    }
-   // 高电平 = 浮球闭合 = 有水
-   return (gpio_get_level(s_gpio_num) == 1);
+   // 低电平 = 浮球断开 = 有水
+   // 高电平 = 浮球闭合 = 缺水
+   return (gpio_get_level(s_gpio_num) == 0);
 }
 
 void float_switch_start_monitor(uint32_t interval_ms)

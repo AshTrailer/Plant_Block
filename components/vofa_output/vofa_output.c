@@ -12,19 +12,24 @@ static int s_uart_num = UART_NUM_0;
 void vofa_output_init(int uart_num, int baud_rate)
 {
    s_uart_num = uart_num;
-
-   // 如果 UART 尚未配置，则配置之
-   // 注：UART0 通常在 bootloader 已配置，此处可跳过或重新配置
-   uart_config_t uart_cfg = {
-      .baud_rate = baud_rate,
-      .data_bits = UART_DATA_8_BITS,
-      .parity    = UART_PARITY_DISABLE,
-      .stop_bits = UART_STOP_BITS_1,
-      .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-      .source_clk = UART_SCLK_APB,
-   };
-   uart_param_config(uart_num, &uart_cfg);
-
+   /* 检查驱动是否已安装（例如被控制台占用）。
+      对 UART0：系统启动后日志/输入用的是 ROM 函数，驱动通常未安装。 */
+   if (!uart_is_driver_installed(uart_num)) {
+      uart_config_t uart_cfg = {
+         .baud_rate = baud_rate,
+         .data_bits = UART_DATA_8_BITS,
+         .parity    = UART_PARITY_DISABLE,
+         .stop_bits = UART_STOP_BITS_1,
+         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+         .source_clk = UART_SCLK_APB,
+      };
+      ESP_ERROR_CHECK(uart_param_config(uart_num, &uart_cfg));
+      /* TX only：2048 字节发送缓冲，不占用 RX（保留给 getchar() 的 ROM 轮询） */
+      ESP_ERROR_CHECK(uart_driver_install(uart_num, 2048, 0, 0, NULL, 0));
+      ESP_LOGI(TAG, "UART%d driver installed (TX only)", uart_num);
+   } else {
+      ESP_LOGI(TAG, "UART%d driver already installed, reusing", uart_num);
+   }
    ESP_LOGI(TAG, "Vofa+ output initialized, UART%d @ %d bps", uart_num, baud_rate);
 }
 

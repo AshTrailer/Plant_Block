@@ -30,11 +30,11 @@ static void ventilation_task(void *arg) {
    VENT_LOGI("Ventilation control task started");
    while (1) {
       s_current_state = false;
-      VENT_LOGI("Ventilation OFF");
+      //VENT_LOGI("Ventilation OFF");
       fan_control_off(FAN_VENTILATION);
       vTaskDelay(s_vent_off_seconds * 1000 / portTICK_PERIOD_MS);
       s_current_state = true;
-      VENT_LOGI("Ventilation ON");
+      //VENT_LOGI("Ventilation ON");
       fan_control_on(FAN_VENTILATION);
       vTaskDelay(s_vent_on_seconds * 1000 / portTICK_PERIOD_MS);
    }

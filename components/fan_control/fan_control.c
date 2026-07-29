@@ -134,7 +134,7 @@ void fan_control_set(fan_id_t fan, bool on, uint8_t duty_pct)
       gpio_set_level(cfg->gpio, on ? 1 : 0);
    }
 
-   ESP_LOGI(TAG, "Fan '%s': %s, duty=%d%%", cfg->name, on ? "ON" : "OFF", duty_pct);
+   //ESP_LOGI(TAG, "Fan '%s': %s, duty=%d%%", cfg->name, on ? "ON" : "OFF", duty_pct);
 }
 
 // ---------- 状态查询 ----------

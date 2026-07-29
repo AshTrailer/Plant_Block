@@ -252,7 +252,7 @@ void light_control_update(void)
          set_pwm_duty(0);
          power_pin_set(false);
          s_state = LIGHT_STATE_OFF;
-         LIGHT_LOGI("自动关");
+         //LIGHT_LOGI("自动关");
       }
       return;
    }

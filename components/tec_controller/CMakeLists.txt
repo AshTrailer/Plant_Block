@@ -12,4 +12,5 @@ idf_component_register(
         data_processor
         ventilation_control
         event_bus
+        vofa_output
 )

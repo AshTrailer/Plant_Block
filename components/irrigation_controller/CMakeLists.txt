@@ -7,4 +7,5 @@ idf_component_register(
         moisture_sensor
         cloud_comm
         float_switch
+        vofa_output
 )

@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
+#include "vofa_output.h"
 
 static const char *TAG = "IRRIGATION";
 
@@ -100,8 +101,10 @@ static void watering_task(void *arg)
    gpio_control_set_level(s_config.pump_pin, false);
    s_state.is_watering = false;
 
-   IRR_LOGI("浇水完成 (%lu ms)，本周 %d/%d 次",
-            duration_ms, s_state.week_water_count, s_config.week_max_times);
+   //IRR_LOGI("浇水完成 (%lu ms)，本周 %d/%d 次",
+   //         duration_ms, s_state.week_water_count, s_config.week_max_times);
+   vofa_output_send("irrigation", "water_done,dur_ms=%lu,week=%d/%d",
+                    duration_ms, s_state.week_water_count, s_config.week_max_times);
    vTaskDelete(NULL);
 }
 
@@ -125,14 +128,16 @@ static void makeup_watering_task(void *arg)
    }
 
    gpio_control_set_level(s_config.pump_pin, false);
-   IRR_LOGI("补浇水完成 (%lu ms)", total_ms);
+   //IRR_LOGI("补浇水完成 (%lu ms)", total_ms);
+   vofa_output_send("irrigation", "makeup_done,total_ms=%lu", total_ms);
    vTaskDelete(NULL);
 }
 
 static bool should_water_now(int moisture_value) {
    if (moisture_value >= s_config.trigger_threshold) {
-      IRR_LOGI("湿度 %d%% ≥ 阈值 %d%%，不浇水",
-               moisture_value, s_config.trigger_threshold);
+      //IRR_LOGI("湿度 %d%% ≥ 阈值 %d%%，不浇水",
+      //         moisture_value, s_config.trigger_threshold);
+      vofa_output_send("irrigation", "skip,moisture=%d,reason=above_threshold", moisture_value);
       return false;
    }
 
@@ -141,19 +146,25 @@ static bool should_water_now(int moisture_value) {
          time_t now = time_manager_get_unix_time();
          double hours = difftime(now, s_state.last_water_time) / 3600.0;
          if (hours < 4.0) {
-            IRR_LOGI("距上次浇水 %.1f h，不足 4h，不浇水", hours);
+            //IRR_LOGI("距上次浇水 %.1f h，不足 4h，不浇水", hours);
+            vofa_output_send("irrigation", "skip,moisture=%d,reason=cooldown,last_h=%.1f",
+                    moisture_value, hours);
             return false;
          }
       }
    }
 
    if (s_state.week_water_count >= s_config.week_max_times) {
-      IRR_LOGI("本周已浇 %d 次，达上限 %d，不浇水",
-               s_state.week_water_count, s_config.week_max_times);
+      //IRR_LOGI("本周已浇 %d 次，达上限 %d，不浇水",
+      //         s_state.week_water_count, s_config.week_max_times);
+      vofa_output_send("irrigation", "skip,moisture=%d,reason=week_max,count=%d",
+                    moisture_value, s_state.week_water_count);
       return false;
    }
 
-   IRR_LOGI("触发浇水: 湿度 %d%% < 阈值 %d%%", moisture_value, s_config.trigger_threshold);
+   //IRR_LOGI("触发浇水: 湿度 %d%% < 阈值 %d%%", moisture_value, s_config.trigger_threshold);
+   vofa_output_send("irrigation", "trigger,moisture=%d,threshold=%d",
+                    moisture_value, s_config.trigger_threshold);
    return true;
 }
 
@@ -189,8 +200,8 @@ static void sensor_check_task(void *arg)
    if (should_water_now((int)humidity)) {
       start_watering();
    } else {
-      IRR_LOGI("湿度 %.1f%% ≥ 阈值 %d%%，无需浇水",
-               humidity, s_config.trigger_threshold);
+      //IRR_LOGI("湿度 %.1f%% ≥ 阈值 %d%%，无需浇水",
+      //         humidity, s_config.trigger_threshold);
    }
 
    stop_sensor_power();
@@ -231,7 +242,8 @@ static void check_time_reset(void) {
 
    s_state.current_week = time_manager_get_current_iso_week();
    s_state.week_water_count = 0;
-   IRR_LOGI("时间重置：周数→%d，浇水计数清零", s_state.current_week);
+   //IRR_LOGI("时间重置：周数→%d，浇水计数清零", s_state.current_week);
+   vofa_output_send("irrigation", "time_reset,iso_week=%d", s_state.current_week);
 
    if (s_state.last_water_time > 0 && difftime(s_state.last_water_time, now) > 0) {
       s_state.last_water_time = 0;
@@ -246,6 +258,7 @@ static void check_time_reset(void) {
 static void start_watering(void) {
    if (s_state.is_watering) {
       IRR_LOGW("已在浇水");
+      
       return;
    }
    if (!water_tank_has_water()) {
@@ -259,7 +272,9 @@ static void start_watering(void) {
 
    uint32_t duration_ms = ML_TO_MS(s_config.water_volume_ml);
    gpio_control_set_level(s_config.pump_pin, true);
-   IRR_LOGI("开始浇水: %d ml → %lu ms", s_config.water_volume_ml, (unsigned long)duration_ms);
+   //IRR_LOGI("开始浇水: %d ml → %lu ms", s_config.water_volume_ml, (unsigned long)duration_ms);
+   vofa_output_send("irrigation", "water_start,vol=%d,dur_ms=%lu",
+                    s_config.water_volume_ml, (unsigned long)duration_ms);
 
    xTaskCreate(watering_task, "watering_task", 3072,
                (void*)(uintptr_t)duration_ms, 2, NULL);
@@ -267,16 +282,19 @@ static void start_watering(void) {
 
 static void handle_week_minimum_watering(void) {
    if (!is_new_week()) return;
-
-   IRR_LOGI("新一周开始，ISO 周数: %d", s_state.current_week);
    int last_count = s_state.week_water_count;
    int required = s_config.week_min_times;
-
+   //IRR_LOGI("新一周开始，ISO 周数: %d", s_state.current_week);
+   vofa_output_send("irrigation", "week_reset,iso_week=%d,last_count=%d",
+                    s_state.current_week, last_count);
+   
    if (last_count < required) {
       int deficit = required - last_count;
       uint32_t total_ms = ML_TO_MS(s_config.water_volume_ml) * deficit;
-      IRR_LOGI("上周仅 %d 次，需补浇 %d 次，总 %lu ms",
-               last_count, deficit, (unsigned long)total_ms);
+      //IRR_LOGI("上周仅 %d 次，需补浇 %d 次，总 %lu ms",
+      //         last_count, deficit, (unsigned long)total_ms);
+      vofa_output_send("irrigation", "makeup_start,deficit=%d,total_ms=%lu",
+                    deficit, (unsigned long)total_ms);
 
       s_state.week_water_count = 0;
       if (water_tank_has_water()) {
@@ -287,8 +305,9 @@ static void handle_week_minimum_watering(void) {
          IRR_LOGE("水箱缺水，无法补浇");
       }
    } else {
-      IRR_LOGI("上周 %d 次 ≥ 最小 %d，无需补浇", last_count, required);
-      s_state.week_water_count = 0;
+      //IRR_LOGI("上周 %d 次 ≥ 最小 %d，无需补浇", last_count, required);
+      //s_state.week_water_count = 0;
+      vofa_output_send("irrigation", "makeup_skip,last=%d,min=%d", last_count, required);
    }
 }
 
@@ -297,7 +316,7 @@ static void check_watering_schedule(void) {
    if (difftime(now, s_state.last_check_time) < 14400.0) return;
    s_state.last_check_time = now;
 
-   IRR_LOGI("4h 检查点，准备检测土壤湿度");
+   //IRR_LOGI("4h 检查点，准备检测土壤湿度");
 
    start_sensor_power();  // moisture_sensor_read_stable 内部会等待稳定
 
@@ -328,7 +347,7 @@ void irrigation_controller_poll(void) {
       handle_week_minimum_watering();
 
       if (s_state.force_check_needed) {
-         IRR_LOGI("强制检查（时间重置后）");
+         //IRR_LOGI("强制检查（时间重置后）");
          if (water_tank_has_water()) {
             start_sensor_power();
             xTaskCreate(sensor_check_task, "sensor_check_f", 4096, NULL, 2, NULL);

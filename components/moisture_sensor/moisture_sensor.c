@@ -195,22 +195,22 @@ void moisture_sensor_init(int power_pin, int adc_pin) {
 
 void moisture_sensor_power_on(void) {
     if (s_is_powered) {
-        MOISTURE_LOGW("Moisture sensor already powered on");
+        //MOISTURE_LOGW("Moisture sensor already powered on");
         return;
     }
     gpio_control_set_level(s_power_pin, true);
     s_is_powered = true;
-    MOISTURE_LOGI("Moisture sensor power ON");
+    //MOISTURE_LOGI("Moisture sensor power ON");
 }
 
 void moisture_sensor_power_off(void) {
     if (!s_is_powered) {
-        MOISTURE_LOGW("Moisture sensor already powered off");
+        //MOISTURE_LOGW("Moisture sensor already powered off");
         return;
     }
     gpio_control_set_level(s_power_pin, false);
     s_is_powered = false;
-    MOISTURE_LOGI("Moisture sensor power OFF");
+    //MOISTURE_LOGI("Moisture sensor power OFF");
     moisture_sensor_stop_reading();
 }
 
@@ -455,7 +455,7 @@ bool moisture_sensor_read_stable(float *humidity_percent)
    // 1. 上电
    if (!was_powered) {
       moisture_sensor_power_on();
-      MOISTURE_LOGI("等待 %d 秒稳定...", STABLE_WAIT_SEC);
+      //MOISTURE_LOGI("等待 %d 秒稳定...", STABLE_WAIT_SEC);
       vTaskDelay(pdMS_TO_TICKS(STABLE_WAIT_SEC * 1000));
    } else {
       // 已上电也稍等，确保读数稳定
@@ -466,7 +466,7 @@ bool moisture_sensor_read_stable(float *humidity_percent)
    int raw_samples[STABLE_SAMPLE_COUNT];
    int valid_count = 0;
 
-   MOISTURE_LOGI("开始采集 %d 个样本 (1s 间隔)...", STABLE_SAMPLE_COUNT);
+   //MOISTURE_LOGI("开始采集 %d 个样本 (1s 间隔)...", STABLE_SAMPLE_COUNT);
    for (int i = 0; i < STABLE_SAMPLE_COUNT; i++) {
       uint32_t volt_efuse = adc_read_voltage_efuse();
       uint32_t volt_cal = apply_secondary_calibration(volt_efuse);
@@ -499,8 +499,8 @@ bool moisture_sensor_read_stable(float *humidity_percent)
       }
    } else {
       float stddev_pct = (stddev / mean) * 100.0f;
-      MOISTURE_LOGI("稳定读取: mean=%.1f mV, stddev=%.1f (%.2f%%)",
-                    mean, stddev, stddev_pct);
+      //MOISTURE_LOGI("稳定读取: mean=%.1f mV, stddev=%.1f (%.2f%%)",
+      //              mean, stddev, stddev_pct);
 
       if (stddev_pct > STABLE_STDDEV_THRESH) {
          MOISTURE_LOGE("标准差 %.2f%% 超过阈值 %.2f%%，数据不稳定",
@@ -513,7 +513,7 @@ bool moisture_sensor_read_stable(float *humidity_percent)
       *humidity_percent = calculate_humidity_percent((uint32_t)mean);
    }
 
-   MOISTURE_LOGI("稳定读取完成: 湿度 = %.1f%%", *humidity_percent);
+   //MOISTURE_LOGI("稳定读取完成: 湿度 = %.1f%%", *humidity_percent);
 
    // 5. 恢复电源状态
    if (!was_powered) {

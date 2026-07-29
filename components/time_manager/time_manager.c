@@ -505,7 +505,7 @@ void time_manager_get_time_string_safe(char* buffer, size_t max_len) {
 void time_manager_update_time(int year, int month, int day, int hour, int minute, int second) {
     // 直接调用设置函数，确保边界检查
     time_manager_set_time(year, month, day, hour, minute, second);
-    ESP_LOGI(TAG, "当前时间: %s", time_manager_get_time_string());
+    //ESP_LOGI(TAG, "当前时间: %s", time_manager_get_time_string());
 }
 
 // 获取当前星期几（0=星期日，1=星期一，...，6=星期六）

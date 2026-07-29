@@ -90,10 +90,10 @@ bool gpio_control_set_level(int pin, bool level) {
     gpio_num_t gpio_pin = pin;
     gpio_set_level(gpio_pin, level ? 1 : 0);
     
-    GPIO_LOGI("GPIO Pin %d level set to: %s (%.1fV)", 
-             pin, 
-             level ? "High Level" : "Low Level",
-             level ? 3.3 : 0.0);
+    //GPIO_LOGI("GPIO Pin %d level set to: %s (%.1fV)", 
+    //         pin, 
+    //         level ? "High Level" : "Low Level",
+    //        level ? 3.3 : 0.0);
     
     return true;
 }
